@@ -107,7 +107,10 @@ def should_generate(records: list[dict]) -> tuple[bool, list[str], int]:
     return True, titles, next_ep_num
 
 
-def generate_stories(client: Anthropic, existing_titles: list[str], count: int) -> list[dict]:
+CHUNK_SIZE = 10  # 한 번의 API 호출로 요청할 개수 - 너무 크면 응답이 중간에 잘릴 수 있어 나눠서 요청
+
+
+def generate_chunk(client: Anthropic, existing_titles: list[str], count: int) -> list[dict]:
     used_titles_text = "\n".join(f"- {t}" for t in existing_titles) or "(없음)"
     user_prompt = (
         f"아래는 이미 사용된 제목 목록입니다. 겹치지 않는 완전히 새로운 소재로 "
@@ -117,7 +120,7 @@ def generate_stories(client: Anthropic, existing_titles: list[str], count: int) 
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=16000,
+        max_tokens=8000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
@@ -130,6 +133,32 @@ def generate_stories(client: Anthropic, existing_titles: list[str], count: int) 
         raise ValueError(f"예상치 못한 응답 형식(배열이 아님): {type(data)}")
 
     return data
+
+
+def generate_stories(client: Anthropic, existing_titles: list[str], count: int) -> list[dict]:
+    """count개를 CHUNK_SIZE씩 나눠서 여러 번 요청해 응답 잘림을 방지한다.
+    매 청크마다 방금 만든 제목도 중복 방지 목록에 추가해가며 진행한다."""
+    all_stories: list[dict] = []
+    titles_pool = list(existing_titles)
+    remaining = count
+
+    while remaining > 0:
+        chunk_size = min(CHUNK_SIZE, remaining)
+        print(f"  생성 중... ({len(all_stories)}/{count})")
+        chunk = generate_chunk(client, titles_pool, chunk_size)
+
+        if not chunk:
+            print(f"  [경고] 이번 요청에서 0개 받음, 중단합니다.")
+            break
+
+        all_stories.extend(chunk)
+        titles_pool.extend(s.get("title", "") for s in chunk if s.get("title"))
+        remaining -= len(chunk)
+
+        if len(chunk) < chunk_size:
+            print(f"  [경고] {chunk_size}개 요청했는데 {len(chunk)}개만 받음")
+
+    return all_stories
 
 
 def validate_story(story: dict, idx: int) -> list[str]:
