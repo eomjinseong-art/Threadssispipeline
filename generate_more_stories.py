@@ -5,15 +5,18 @@
 그렇다면(그리고 아직 EP.051이 없다면) Claude에게 새 사연 50개(EP.051~100)를
 표준 포맷 그대로 만들게 해서 시트에 자동으로 추가한다.
 
+[버그 수정] 이전 버전은 EP 값을 문자열로 비교했다("030" == TRIGGER_EP).
+구글 시트가 "030" 같은 앞자리 0이 있는 값을 자동으로 숫자 30으로 바꿔버리는
+경우가 있어서, 문자열 비교가 영원히 실패하고 트리거가 한 번도 안 걸리는
+문제가 있었다. 이번 버전은 EP 값을 무조건 정수로 변환해서 비교하므로,
+시트에 "030"으로 저장돼 있든 "30"으로 저장돼 있든 상관없이 정상 동작한다.
+
 [동작 방식]
 매 실행(하루 3회)마다 이 스크립트가 먼저 돈다. 대부분의 실행에서는 시트를
 한 번 읽어보는 것 말고는 아무 일도 안 하고 조용히 끝난다(비용 거의 없음).
-"EP.030 완료 + EP.051 없음" 조건이 맞는 딱 그 순간에만 Claude API를
-한 번 호출해서 50개를 한꺼번에 만들고 끝낸다. 그 다음 실행부터는
-EP.051이 이미 있으니 다시 트리거되지 않는다(중복 생성 방지).
-
-트리거 조건을 바꾸고 싶으면(예: 30번째가 아니라 40번째에 보충) 아래
-TRIGGER_EP, BATCH_START_EP 값만 수정하면 된다.
+"EP.030 완료 + 원래 50개를 넘는 EP 없음" 조건이 맞는 딱 그 순간에만 Claude
+API를 한 번 호출해서 50개를 한꺼번에 만들고 끝낸다. 그 다음 실행부터는
+이미 50개를 넘는 EP가 있으니 다시 트리거되지 않는다(중복 생성 방지).
 
 필요 환경변수:
   ANTHROPIC_API_KEY
@@ -24,7 +27,6 @@ TRIGGER_EP, BATCH_START_EP 값만 수정하면 된다.
 """
 
 import os
-import re
 import json
 import sys
 
@@ -35,9 +37,9 @@ from anthropic import Anthropic
 SHEET_ID = "1AOvI5ExbZ4j_BJHZvZnWnXExCDOebjxgsiRr7SWfuDE"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-TRIGGER_EP = "030"       # 이 회차가 "완료"되면 보충을 시작한다
-BATCH_SIZE = 50          # 한 번에 몇 개를 새로 만들지
-COLUMNS = ["Status", "EP", "제목", "사연", "현실언니", "공감언니", "폭주언니", "질문"]
+TRIGGER_EP_NUM = 30       # 이 회차(숫자 기준)가 "완료"되면 보충을 시작한다
+BATCH_SIZE = 50           # 한 번에 몇 개를 새로 만들지
+ORIGINAL_BATCH_SIZE = 50  # 처음 채워둔 사연 개수. 이 숫자를 넘는 EP가 이미 있으면 "이미 보충됨"으로 판단
 
 SYSTEM_PROMPT = """당신은 한국어 유튜브 쇼츠/틱톡용 "사연" 콘텐츠 작가입니다.
 스레드에서 만난 친한 언니들이 사연에 반응하는 콘텐츠의 대본을 씁니다.
@@ -71,17 +73,29 @@ def load_client() -> gspread.Client:
     return gspread.authorize(creds)
 
 
-ORIGINAL_BATCH_SIZE = 50  # 처음 채워둔 사연 개수. 이 숫자를 넘는 EP가 이미 있으면 "이미 보충됨"으로 판단
+def ep_to_int(raw) -> int | None:
+    """EP 셀 값을 정수로 변환. "030", "30", 30 등 어떤 형태로 저장돼 있든 처리."""
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        return int(float(s))  # 혹시 "30.0"처럼 숫자로 변환됐을 경우까지 대비
+    except ValueError:
+        return None
 
 
 def should_generate(records: list[dict]) -> tuple[bool, list[str], int]:
     """(생성해야 하는지, 기존 제목 목록, 다음 EP 시작 번호) 반환."""
-    trigger_row = next((r for r in records if str(r.get("EP", "")).strip() == TRIGGER_EP), None)
+    trigger_row = None
+    for r in records:
+        if ep_to_int(r.get("EP", "")) == TRIGGER_EP_NUM:
+            trigger_row = r
+            break
+
     if not trigger_row or str(trigger_row.get("Status", "")).strip() != "완료":
         return False, [], 0
 
-    existing_eps = [str(r.get("EP", "")).strip() for r in records if str(r.get("EP", "")).strip()]
-    ep_numbers = [int(e) for e in existing_eps if e.isdigit()]
+    ep_numbers = [n for n in (ep_to_int(r.get("EP", "")) for r in records) if n is not None]
     max_ep_num = max(ep_numbers, default=0)
 
     # 이미 원래 50개(ORIGINAL_BATCH_SIZE)를 넘는 EP가 존재하면 = 이전에 이미 보충된 것 -> 재생성 방지
@@ -150,10 +164,10 @@ def main():
     trigger, existing_titles, next_ep_num = should_generate(records)
 
     if not trigger:
-        print(f"보충 조건 미충족(EP.{TRIGGER_EP} 미완료 또는 이미 보충됨) - 건너뜀.")
+        print(f"보충 조건 미충족(EP.{TRIGGER_EP_NUM} 미완료 또는 이미 보충됨) - 건너뜀.")
         return
 
-    print(f"EP.{TRIGGER_EP} 완료 확인, EP.{next_ep_num:03d}부터 {BATCH_SIZE}개 생성 시작...")
+    print(f"EP.{TRIGGER_EP_NUM} 완료 확인, EP.{next_ep_num:03d}부터 {BATCH_SIZE}개 생성 시작...")
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
