@@ -70,7 +70,6 @@ THREADS_MAX_CHARS = 500
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/youtube.force-ssl",  # 댓글 게시에 필요
 ]
 
