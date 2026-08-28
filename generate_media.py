@@ -3,7 +3,7 @@
 
 ElevenLabs API 대신 Microsoft Edge TTS(무료)를 사용하여
 output/script_{date}.json 의 narration 전체를 한 번에 낭독하는 음성을 생성하고,
-전체 음성 길이를 기반으로 turn별 duration을 가상 계산하여 
+전체 음성 길이를 기반으로 turn별 duration 및 image_path를 계산하여
 assemble_video.py에서 사용할 output/manifest_{date}.json 을 작성한다.
 """
 
@@ -17,6 +17,9 @@ from mutagen.mp3 import MP3
 SCRIPT_PATH_TEMPLATE = "output/script_{date}.json"
 NARRATION_AUDIO_TEMPLATE = "output/narration_{date}.mp3"
 MANIFEST_PATH_TEMPLATE = "output/manifest_{date}.json"
+
+# 기본 배경 이미지 경로 설정 (프로젝트에 맞는 기본 이미지)
+DEFAULT_IMAGE_PATH = "assets/background.png"
 
 # 음성 모델 선택 (또렷하고 깔끔한 한국어 여성 진행자 톤)
 DEFAULT_VOICE = "ko-KR-SunHiNeural"
@@ -60,11 +63,11 @@ def synth_audio_edge(text: str, out_path: str, voice: str = DEFAULT_VOICE) -> No
 
 
 # ---------------------------------------------------------------------------
-# 오디오 길이 기반 Turn별 Duration 계산
+# 오디오 길이 기반 Turn별 Duration 및 Image Path 계산
 # ---------------------------------------------------------------------------
 
-def calculate_turn_durations(audio_path: str, turns: list[dict]) -> list[dict]:
-    """전체 음성 길이를 측정하고 weight_text 비율로 turn별 duration을 분배한다."""
+def process_turns(audio_path: str, turns: list[dict]) -> list[dict]:
+    """전체 음성 길이를 측정하여 duration을 분배하고, image_path를 주입한다."""
     audio = MP3(audio_path)
     total_duration = audio.info.length  # 전체 오디오 길이 (초)
 
@@ -76,6 +79,10 @@ def calculate_turn_durations(audio_path: str, turns: list[dict]) -> list[dict]:
         text_len = len(t.get("weight_text", t.get("line", "")))
         # 비율에 맞춰 duration 분배
         t["duration"] = (text_len / total_weight_len) * total_duration
+        
+        # image_path가 없는 경우 기본값 세팅
+        if "image_path" not in t or not t["image_path"]:
+            t["image_path"] = DEFAULT_IMAGE_PATH
 
     return turns
 
@@ -110,9 +117,9 @@ def main():
             voice=DEFAULT_VOICE
         )
 
-        # 2. 오디오 전체 길이를 구하여 turns에 duration 계산 및 주입
+        # 2. turns 데이터 가공 (duration 및 image_path 주입)
         turns = script.get("turns", [])
-        turns_with_duration = calculate_turn_durations(narration_audio_path, turns)
+        processed_turns = process_turns(narration_audio_path, turns)
 
         # 3. assemble_video.py 호환용 manifest_*.json 파일 생성
         manifest_data = {
@@ -120,13 +127,13 @@ def main():
             "script_path": script_path,
             "audio_path": narration_audio_path,
             "title": script.get("title", ""),
-            "turns": turns_with_duration
+            "turns": processed_turns
         }
 
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest_data, f, ensure_ascii=False, indent=2)
 
-        print(f"매니페스트 파일 생성 완료 (duration 계산 포함): {manifest_path}")
+        print(f"매니페스트 파일 생성 완료: {manifest_path}")
         print("성공적으로 4단계(음성 및 매니페스트 생성)가 완료되었습니다.")
 
     except Exception as e:
