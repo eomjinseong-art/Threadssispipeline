@@ -34,7 +34,6 @@ def ensure_default_image_exists(image_path: str = DEFAULT_IMAGE_PATH) -> None:
     """배경 이미지 파일이 없으면 1080x1920 단색 배경을 자동 생성한다."""
     if not os.path.exists(image_path):
         os.makedirs(os.path.dirname(image_path), exist_ok=True)
-        # 1080x1920 진한 어두운 배경 생성 (RGB: 18, 18, 24)
         img = Image.new("RGB", (1080, 1920), color=(18, 18, 24))
         img.save(image_path)
         print(f"기본 배경 이미지 자동 생성 완료: {image_path}")
@@ -92,10 +91,8 @@ def process_turns(audio_path: str, turns: list[dict]) -> list[dict]:
 
     for t in turns:
         text_len = len(t.get("weight_text", t.get("line", "")))
-        # 비율에 맞춰 duration 분배
         t["duration"] = (text_len / total_weight_len) * total_duration
         
-        # image_path가 없거나 해당 파일이 없으면 기본 이미지 지정
         if "image_path" not in t or not t["image_path"] or not os.path.exists(t["image_path"]):
             t["image_path"] = DEFAULT_IMAGE_PATH
 
@@ -108,7 +105,6 @@ def process_turns(audio_path: str, turns: list[dict]) -> list[dict]:
 
 def main():
     try:
-        # 0. 기본 배경 이미지 존재 유무 점검 및 필요시 자동 생성
         ensure_default_image_exists()
 
         date = find_latest_script_date()
@@ -139,11 +135,12 @@ def main():
         turns = script.get("turns", [])
         processed_turns = process_turns(narration_audio_path, turns)
 
-        # 3. assemble_video.py 호환용 manifest_*.json 파일 생성
+        # 3. assemble_video.py 호환용 manifest_*.json 파일 생성 (narration_audio 및 audio_path 둘 다 포함)
         manifest_data = {
             "date": date,
             "script_path": script_path,
-            "audio_path": narration_audio_path,
+            "narration_audio": narration_audio_path,  # assemble_video.py 필수 키
+            "audio_path": narration_audio_path,       # 하위 호환성 유지용
             "title": script.get("title", ""),
             "turns": processed_turns
         }
