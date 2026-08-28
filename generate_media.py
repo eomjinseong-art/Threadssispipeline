@@ -13,16 +13,31 @@ import json
 import asyncio
 import edge_tts
 from mutagen.mp3 import MP3
+from PIL import Image
 
 SCRIPT_PATH_TEMPLATE = "output/script_{date}.json"
 NARRATION_AUDIO_TEMPLATE = "output/narration_{date}.mp3"
 MANIFEST_PATH_TEMPLATE = "output/manifest_{date}.json"
 
-# 기본 배경 이미지 경로 설정 (프로젝트에 맞는 기본 이미지)
+# 기본 배경 이미지 경로
 DEFAULT_IMAGE_PATH = "assets/background.png"
 
 # 음성 모델 선택 (또렷하고 깔끔한 한국어 여성 진행자 톤)
 DEFAULT_VOICE = "ko-KR-SunHiNeural"
+
+
+# ---------------------------------------------------------------------------
+# 필수 이미지 보장 (없으면 기본 이미지 자동 생성)
+# ---------------------------------------------------------------------------
+
+def ensure_default_image_exists(image_path: str = DEFAULT_IMAGE_PATH) -> None:
+    """배경 이미지 파일이 없으면 1080x1920 단색 배경을 자동 생성한다."""
+    if not os.path.exists(image_path):
+        os.makedirs(os.path.dirname(image_path), exist_ok=True)
+        # 1080x1920 진한 어두운 배경 생성 (RGB: 18, 18, 24)
+        img = Image.new("RGB", (1080, 1920), color=(18, 18, 24))
+        img.save(image_path)
+        print(f"기본 배경 이미지 자동 생성 완료: {image_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +95,8 @@ def process_turns(audio_path: str, turns: list[dict]) -> list[dict]:
         # 비율에 맞춰 duration 분배
         t["duration"] = (text_len / total_weight_len) * total_duration
         
-        # image_path가 없는 경우 기본값 세팅
-        if "image_path" not in t or not t["image_path"]:
+        # image_path가 없거나 해당 파일이 없으면 기본 이미지 지정
+        if "image_path" not in t or not t["image_path"] or not os.path.exists(t["image_path"]):
             t["image_path"] = DEFAULT_IMAGE_PATH
 
     return turns
@@ -93,6 +108,9 @@ def process_turns(audio_path: str, turns: list[dict]) -> list[dict]:
 
 def main():
     try:
+        # 0. 기본 배경 이미지 존재 유무 점검 및 필요시 자동 생성
+        ensure_default_image_exists()
+
         date = find_latest_script_date()
         print(f"대상 날짜: {date}")
 
