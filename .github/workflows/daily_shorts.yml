@@ -27,7 +27,7 @@ jobs:
       - name: 파이썬 의존성 설치
         run: |
           python -m pip install --upgrade pip
-          pip install edge-tts
+          pip install edge-tts mutagen
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: "0단계: 사연 재고 자동 보충 (조건부)"
