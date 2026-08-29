@@ -43,7 +43,7 @@ jobs:
 
       - name: "4단계: 음성/이미지 생성"
         env:
-          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+         
         run: python generate_media.py
 
       - name: "5단계: 영상 조립 (ffmpeg)"
