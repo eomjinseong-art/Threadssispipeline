@@ -1,22 +1,22 @@
 """
-1일 1쇼츠 자동화 파이프라인 - 3단계 교체: 구글 시트에서 사연 가져오기
+1일 1쇼츠 자동화 파이프라인 - 1단계: 구글 시트에서 사연 가져오기 (미니멀 3슬라이드 버전)
 
-Claude를 부르지 않고, 미리 만들어둔 구글 스프레드시트
-("언니삼총사 사연 시트")에서 Status="대기"인 사연 하나를 가져와
-output/script_{date}.json 을 만든다.
+[재설계 배경] 기존 방식(턴마다 개별 TTS+세그먼트, 최대 11개)은 장애 지점이
+많아서(음성 API, 채널 인증, 시트 형식 등 어디서든 깨지면 전체가 안 됨)
+계속 문제가 반복됐다. 그래서 슬라이드를 3장으로 줄이고, 유료 ElevenLabs
+대신 무료 edge-tts로 바꿔서 비용도 없애고 장애 지점도 최소화했다.
 
-[방식] 유니(ElevenLabs) 한 명이 팟캐스트 진행자처럼 사연 전체를 이어서
-낭독하는 방식. 화면(카톡 채팅 UI)은 기존처럼 turn(말풍선) 단위로 나뉘어
-있지만, 음성은 turn마다 따로 만들지 않고 전체를 한 번에 이어붙인
-"narration" 텍스트 하나로 통째로 TTS를 한 번만 호출한다.
+슬라이드 구성:
+  1) 사연 - 상황 설명 전체
+  2) 언니들 반응 - 현실언니/공감언니/폭주언니 대사 한 화면에 같이
+  3) 질문 - 마무리 질문
 
-각 turn에는 화면에 보일 원문(line)과, 그 turn이 낭독 전체에서 차지하는
-분량을 가늠하기 위한 weight_text(내레이션에는 포함되지만 화면에는 안
-보이는 연결어구까지 포함)를 같이 저장한다. weight_text 길이 비율로
-전체 음성 길이를 turn별로 나눠서 화면 타이밍을 맞춘다(4단계에서 사용).
+각 슬라이드는 화면에 보일 텍스트(display_text)와, 그 슬라이드에서 실제로
+낭독될 텍스트(narration_text, 팟캐스트 진행자가 "현실언니는 이렇게 말합니다"
+식으로 화자를 소개하며 읽는 문장)를 따로 가진다.
 
 필요 환경변수:
-  GOOGLE_SHEETS_CREDENTIALS  - 서비스 계정 JSON 전체 내용(문자열)
+  GOOGLE_SHEETS_CREDENTIALS
 
 필요 패키지:
   pip install gspread google-auth --break-system-packages
@@ -34,19 +34,7 @@ SHEET_ID = "1AOvI5ExbZ4j_BJHZvZnWnXExCDOebjxgsiRr7SWfuDE"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SCRIPT_PATH_TEMPLATE = "output/script_{date}.json"
 
-# ElevenLabs Yooni - 팟캐스트 진행자처럼 사연 전체를 혼자 낭독
-VOICE_ID = "n2fbxG88jqAoaVPUy3IG"
-
-CHARACTER_NAMES = {
-    "reporter": "제보자",
-    "real": "현실언니",
-    "empathy": "공감언니",
-    "rage": "폭주언니",
-    "question": "",
-}
-
 INTRO = "안녕하세요, 오늘도 사연 하나 들고 왔습니다."
-BRIDGE = "이 얘기를 들은 언니들의 반응은 이랬습니다."
 
 REQUIRED_COLUMNS = ["Status", "EP", "제목", "사연", "현실언니", "공감언니", "폭주언니", "질문"]
 
@@ -61,9 +49,8 @@ def load_client() -> gspread.Client:
 
 
 def find_pending_row(ws: gspread.Worksheet):
-    """Status가 '대기'인 첫 번째 행을 찾는다. (행 번호, 행 데이터) 반환, 없으면 (None, None)."""
     records = ws.get_all_records()
-    for i, row in enumerate(records, start=2):  # 1행은 헤더라서 데이터는 2행부터
+    for i, row in enumerate(records, start=2):
         if str(row.get("Status", "")).strip() == "대기":
             return i, row
     return None, None
@@ -75,9 +62,7 @@ def validate_row(row: dict, ep_label: str) -> None:
         raise SystemExit(f"EP.{ep_label} 행에 빈 컬럼이 있습니다: {missing}")
 
 
-def build_turns(row: dict) -> list[dict]:
-    """화면(카톡 UI)에 쓸 turn 목록. line=화면에 보일 원문, weight_text=낭독 전체에서
-    이 turn이 차지하는 분량(타이밍 계산용, 연결어구 포함)."""
+def build_slides(row: dict) -> list[dict]:
     story_lines = [s.strip() for s in str(row["사연"]).split("\n") if s.strip()]
     if not story_lines:
         raise SystemExit("사연 컬럼이 비어 있습니다.")
@@ -87,35 +72,39 @@ def build_turns(row: dict) -> list[dict]:
     rage = str(row["폭주언니"]).strip()
     question = str(row["질문"]).strip()
 
-    turns = []
-    for i, line in enumerate(story_lines):
-        weight_text = f"{INTRO} {line}" if i == 0 else line
-        turns.append({"speaker": "reporter", "line": line, "weight_text": weight_text})
+    slides = [
+        {
+            "type": "story",
+            "display_text": "\n".join(story_lines),
+            "narration_text": f"{INTRO} " + " ".join(story_lines),
+        },
+        {
+            "type": "reactions",
+            "display_text": (
+                f"현실언니: {real}\n\n공감언니: {empathy}\n\n폭주언니: {rage}"
+            ),
+            "narration_text": (
+                f"현실언니는 이렇게 말합니다. {real} "
+                f"공감언니는 이렇게 말합니다. {empathy} "
+                f"그리고 폭주언니는 이렇게 말합니다. {rage}"
+            ),
+        },
+        {
+            "type": "question",
+            "display_text": question,
+            "narration_text": question,
+        },
+    ]
 
-    turns.append({
-        "speaker": "real", "line": real,
-        "weight_text": f"{BRIDGE} 현실언니는 이렇게 말합니다. {real}",
-    })
-    turns.append({
-        "speaker": "empathy", "line": empathy,
-        "weight_text": f"공감언니는 이렇게 말합니다. {empathy}",
-    })
-    turns.append({
-        "speaker": "rage", "line": rage,
-        "weight_text": f"그리고 폭주언니는 이렇게 말합니다. {rage}",
-    })
-    turns.append({"speaker": "question", "line": question, "weight_text": question})
+    for i, s in enumerate(slides):
+        s["index"] = i
 
-    for i, t in enumerate(turns):
-        t["index"] = i
-        t["character_name"] = CHARACTER_NAMES[t["speaker"]]
-
-    return turns
+    return slides
 
 
-def build_narration(turns: list[dict]) -> str:
-    """turn별 weight_text를 순서대로 이어붙이면 낭독 전체 텍스트가 된다."""
-    return " ".join(t["weight_text"] for t in turns)
+def build_narration(slides: list[dict]) -> str:
+    """전체 낭독 텍스트(업로드 설명/스레드 글감으로 재사용)."""
+    return " ".join(s["narration_text"] for s in slides)
 
 
 def main():
@@ -132,17 +121,16 @@ def main():
     validate_row(row, ep)
 
     title_raw = str(row["제목"]).strip()
-    turns = build_turns(row)
-    narration = build_narration(turns)
+    slides = build_slides(row)
+    narration = build_narration(slides)
 
     today = dt.date.today().isoformat()
     output = {
         "date": today,
         "ep": ep,
         "title": f"EP.{ep} {title_raw}",
-        "voice_id": VOICE_ID,
         "narration": narration,
-        "turns": turns,
+        "slides": slides,
     }
 
     os.makedirs("output", exist_ok=True)
@@ -150,14 +138,11 @@ def main():
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
-    # 처리한 행은 다음 실행 때 건너뛰도록 완료 처리 + Status 셀을 초록색으로 표시
     ws.update_cell(row_index, 1, "완료")
-    ws.format(f"A{row_index}", {
-        "backgroundColor": {"red": 0.71, "green": 0.84, "blue": 0.66}
-    })
+    ws.format(f"A{row_index}", {"backgroundColor": {"red": 0.71, "green": 0.84, "blue": 0.66}})
 
     print(f"완료: {out_path}")
-    print(f"EP.{ep} {title_raw} - turn {len(turns)}개, 낭독 {len(narration)}자")
+    print(f"EP.{ep} {title_raw} - 슬라이드 {len(slides)}장")
 
 
 if __name__ == "__main__":
