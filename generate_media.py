@@ -1,159 +1,227 @@
 """
-1일 1쇼츠 자동화 파이프라인 - 4단계: 무료 Edge-TTS 기반 음성 및 매니페스트 생성
+1일 1쇼츠 자동화 파이프라인 - 2단계: 음성/이미지 생성 (미니멀 3슬라이드 버전)
 
-ElevenLabs API 대신 Microsoft Edge TTS(무료)를 사용하여
-output/script_{date}.json 의 narration 전체를 한 번에 낭독하는 음성을 생성하고,
-전체 음성 길이를 기반으로 turn별 duration 및 image_path를 계산하여
-assemble_video.py에서 사용할 output/manifest_{date}.json 을 작성한다.
+fetch_script.py가 만든 output/script_{date}.json의 슬라이드 3장마다:
+  1) edge-tts(무료, Microsoft)로 그 슬라이드의 narration_text를 음성으로 만들고
+  2) 그 슬라이드의 display_text를 화면 전체 카드 이미지로 PIL 렌더링
+슬라이드당 audio_path/image_path/duration을 채운 manifest_{date}.json을 만든다.
+
+[미니멀 설계] 슬라이드가 3장뿐이라 API 호출도 3번(전부 무료)뿐이고, 각
+슬라이드는 그 자신의 실제 음성 길이를 그대로 쓰므로(카톡 UI 때처럼 turn이
+많아서 비율 계산하던 방식과 달리) 타이밍 어긋날 일이 없다. 화면도 애니메이션
+없이 카드 하나가 통째로 떠 있다가 다음 카드로 바뀌는 방식이라 렌더링 로직도
+단순하다.
+
+필요 패키지:
+  pip install edge-tts Pillow --break-system-packages
+
+필요 폰트(한글 렌더링):
+  워크플로에 sudo apt-get install -y fonts-nanum 필요
+
+edge-tts 목소리를 바꾸고 싶으면 VOICE 상수만 수정하면 된다.
+목록 확인: edge-tts --list-voices | grep ko-KR
 """
 
 import os
-import glob
 import json
 import asyncio
+import subprocess
+import datetime as dt
+
 import edge_tts
-from mutagen.mp3 import MP3
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 SCRIPT_PATH_TEMPLATE = "output/script_{date}.json"
-NARRATION_AUDIO_TEMPLATE = "output/narration_{date}.mp3"
 MANIFEST_PATH_TEMPLATE = "output/manifest_{date}.json"
+SEGMENTS_DIR_TEMPLATE = "output/segments_{date}"
 
-# 기본 배경 이미지 경로
-DEFAULT_IMAGE_PATH = "assets/background.png"
+VOICE = "ko-KR-SunHiNeural"  # 무료 한국어 여성 음성(Microsoft edge-tts)
+RATE = "+15%"  # 기본 속도보다 15% 빠르게 - 쇼츠 특성상 속도감 있게
 
-# 음성 모델 선택 (또렷하고 깔끔한 한국어 여성 진행자 톤)
-DEFAULT_VOICE = "ko-KR-SunHiNeural"
+W, H = 1080, 1920
+SAFE_TOP = 260
+SAFE_BOTTOM = H - 320
+SAFE_LEFT = 100
+SAFE_RIGHT = W - 100
+SAFE_WIDTH = SAFE_RIGHT - SAFE_LEFT
 
+BG_COLOR = (250, 250, 248)
+TEXT_COLOR = (30, 30, 30)
+LABEL_COLOR = (140, 140, 135)
 
-# ---------------------------------------------------------------------------
-# 필수 이미지 보장 (없으면 기본 이미지 자동 생성)
-# ---------------------------------------------------------------------------
+SLIDE_LABELS = {
+    "story": "사연",
+    "reactions": "언니들의 반응",
+    "question": "여러분의 생각은?",
+}
 
-def ensure_default_image_exists(image_path: str = DEFAULT_IMAGE_PATH) -> None:
-    """배경 이미지 파일이 없으면 1080x1920 단색 배경을 자동 생성한다."""
-    if not os.path.exists(image_path):
-        os.makedirs(os.path.dirname(image_path), exist_ok=True)
-        img = Image.new("RGB", (1080, 1920), color=(18, 18, 24))
-        img.save(image_path)
-        print(f"기본 배경 이미지 자동 생성 완료: {image_path}")
+# 슬라이드 종류별로 화자 라벨(현실언니/공감언니/폭주언니) 색을 다르게 표시
+SPEAKER_COLORS = {
+    "현실언니": (55, 138, 221),
+    "공감언니": (99, 153, 34),
+    "폭주언니": (226, 75, 74),
+}
 
-
-# ---------------------------------------------------------------------------
-# 날짜/파일 찾기
-# ---------------------------------------------------------------------------
-
-def find_latest_script_date() -> str:
-    paths = glob.glob(SCRIPT_PATH_TEMPLATE.format(date="*"))
-    dates = []
-    for p in paths:
-        basename = os.path.basename(p)
-        date_str = basename.replace("script_", "").replace(".json", "")
-        if len(date_str) == 10:  # YYYY-MM-DD
-            dates.append(date_str)
-            
-    if not dates:
-        raise FileNotFoundError(
-            "output/script_*.json 파일을 찾을 수 없습니다. "
-            "fetch_script.py를 먼저 실행했는지 확인하세요."
-        )
-    return sorted(dates)[-1]
+FONT_CANDIDATES_BOLD = [
+    "/usr/share/fonts/truetype/nanum/NanumGothicExtraBold.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+]
+FONT_CANDIDATES_REGULAR = [
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+]
 
 
-# ---------------------------------------------------------------------------
-# Edge-TTS 음성 합성
-# ---------------------------------------------------------------------------
+def get_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    raise SystemExit(
+        "한글 TTF 폰트를 찾을 수 없습니다. "
+        "워크플로에 'sudo apt-get install -y fonts-nanum' 스텝이 있는지 확인하세요."
+    )
 
-async def generate_speech_async(text: str, voice: str, out_path: str) -> None:
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    communicate = edge_tts.Communicate(text, voice)
+
+def get_audio_duration(path: str) -> float:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", path],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe 실패: {result.stderr}")
+    return float(result.stdout.strip())
+
+
+def wrap_text(draw, text: str, font, max_width: int) -> list[str]:
+    words = text.split(" ")
+    lines, current = [], ""
+    for w in words:
+        trial = f"{current} {w}".strip()
+        if draw.textlength(trial, font=font) <= max_width or not current:
+            current = trial
+        else:
+            lines.append(current)
+            current = w
+    if current:
+        lines.append(current)
+    return lines
+
+
+def render_slide(slide: dict, font_body, font_label, line_height: int) -> Image.Image:
+    img = Image.new("RGB", (W, H), BG_COLOR)
+    draw = ImageDraw.Draw(img)
+
+    label = SLIDE_LABELS.get(slide["type"], "")
+    if label:
+        draw.text((SAFE_LEFT, SAFE_TOP), label, font=font_label, fill=LABEL_COLOR)
+
+    body_top = SAFE_TOP + 80
+    if slide["type"] == "reactions":
+        paragraphs = slide["display_text"].split("\n\n")
+    else:
+        paragraphs = slide["display_text"].split("\n")
+
+    # 각 문단(화자별 대사 등)을 줄바꿈까지 반영해서 라인 목록으로 변환
+    all_lines: list[tuple[str, tuple]] = []  # (텍스트, 색상)
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        speaker_color = TEXT_COLOR
+        for speaker, color in SPEAKER_COLORS.items():
+            if para.startswith(speaker + ":"):
+                speaker_color = color
+                break
+        wrapped = wrap_text(draw, para, font_body, SAFE_WIDTH)
+        for line in wrapped:
+            all_lines.append((line, speaker_color))
+        all_lines.append(("", TEXT_COLOR))  # 문단 사이 여백 한 줄
+
+    if all_lines and all_lines[-1][0] == "":
+        all_lines.pop()
+
+    total_h = len(all_lines) * line_height
+    available_h = SAFE_BOTTOM - body_top
+    y = body_top + max((available_h - total_h) // 2, 0)
+
+    for line, color in all_lines:
+        if line:
+            line_w = draw.textlength(line, font=font_body)
+            x = SAFE_LEFT + (SAFE_WIDTH - line_w) // 2
+            draw.text((x, y), line, font=font_body, fill=color)
+        y += line_height
+
+    return img
+
+
+async def synth_audio_async(text: str, out_path: str) -> None:
+    communicate = edge_tts.Communicate(text, VOICE, rate=RATE)
     await communicate.save(out_path)
 
 
-def synth_audio_edge(text: str, out_path: str, voice: str = DEFAULT_VOICE) -> None:
-    print(f"Edge-TTS 음성 합성 시작 (목소리: {voice}, 글자 수: {len(text)}자)...")
-    asyncio.run(generate_speech_async(text, voice, out_path))
-    print(f"음성 파일 생성 완료: {out_path}")
+def synth_audio(text: str, out_path: str) -> None:
+    asyncio.run(synth_audio_async(text, out_path))
 
-
-# ---------------------------------------------------------------------------
-# 오디오 길이 기반 Turn별 Duration 및 Image Path 계산
-# ---------------------------------------------------------------------------
-
-def process_turns(audio_path: str, turns: list[dict]) -> list[dict]:
-    """전체 음성 길이를 측정하여 duration을 분배하고, image_path를 주입한다."""
-    audio = MP3(audio_path)
-    total_duration = audio.info.length  # 전체 오디오 길이 (초)
-
-    total_weight_len = sum(len(t.get("weight_text", t.get("line", ""))) for t in turns)
-    if total_weight_len == 0:
-        total_weight_len = 1
-
-    for t in turns:
-        text_len = len(t.get("weight_text", t.get("line", "")))
-        t["duration"] = (text_len / total_weight_len) * total_duration
-        
-        if "image_path" not in t or not t["image_path"] or not os.path.exists(t["image_path"]):
-            t["image_path"] = DEFAULT_IMAGE_PATH
-
-    return turns
-
-
-# ---------------------------------------------------------------------------
-# 메인
-# ---------------------------------------------------------------------------
 
 def main():
-    try:
-        ensure_default_image_exists()
+    today = dt.date.today().isoformat()
+    script_path = SCRIPT_PATH_TEMPLATE.format(date=today)
+    if not os.path.exists(script_path):
+        raise SystemExit(f"{script_path} 가 없습니다. fetch_script.py를 먼저 실행하세요.")
 
-        date = find_latest_script_date()
-        print(f"대상 날짜: {date}")
+    with open(script_path, encoding="utf-8") as f:
+        script = json.load(f)
 
-        script_path = SCRIPT_PATH_TEMPLATE.format(date=date)
-        narration_audio_path = NARRATION_AUDIO_TEMPLATE.format(date=date)
-        manifest_path = MANIFEST_PATH_TEMPLATE.format(date=date)
+    segments_dir = SEGMENTS_DIR_TEMPLATE.format(date=today)
+    audio_dir = os.path.join(segments_dir, "audio")
+    image_dir = os.path.join(segments_dir, "images")
+    os.makedirs(audio_dir, exist_ok=True)
+    os.makedirs(image_dir, exist_ok=True)
 
-        if not os.path.exists(script_path):
-            raise FileNotFoundError(f"{script_path} 파일이 존재하지 않습니다.")
+    font_body = get_font(FONT_CANDIDATES_BOLD, 52)
+    font_label = get_font(FONT_CANDIDATES_BOLD, 32)
+    line_height = 70
 
-        with open(script_path, "r", encoding="utf-8") as f:
-            script = json.load(f)
+    manifest_slides = []
+    total_duration = 0.0
 
-        narration_text = script.get("narration", "").strip()
-        if not narration_text:
-            raise ValueError("script.json 내에 narration 텍스트가 비어 있습니다.")
+    for slide in script["slides"]:
+        i = slide["index"]
+        print(f"[{i + 1}/{len(script['slides'])}] ({slide['type']}) {slide['narration_text'][:30]}...")
 
-        # 1. 음성 파일 생성
-        synth_audio_edge(
-            text=narration_text,
-            out_path=narration_audio_path,
-            voice=DEFAULT_VOICE
-        )
+        audio_path = os.path.join(audio_dir, f"{i:02d}.mp3")
+        synth_audio(slide["narration_text"], audio_path)
+        duration = get_audio_duration(audio_path)
+        total_duration += duration
 
-        # 2. turns 데이터 가공 (duration 및 image_path 주입)
-        turns = script.get("turns", [])
-        processed_turns = process_turns(narration_audio_path, turns)
+        image_path = os.path.join(image_dir, f"{i:02d}.png")
+        frame = render_slide(slide, font_body, font_label, line_height)
+        frame.save(image_path)
 
-        # 3. assemble_video.py 호환용 manifest_*.json 파일 생성 (narration_audio 및 audio_path 둘 다 포함)
-        manifest_data = {
-            "date": date,
-            "script_path": script_path,
-            "narration_audio": narration_audio_path,  # assemble_video.py 필수 키
-            "audio_path": narration_audio_path,       # 하위 호환성 유지용
-            "title": script.get("title", ""),
-            "turns": processed_turns
-        }
+        manifest_slides.append({
+            "index": i,
+            "type": slide["type"],
+            "audio_path": audio_path,
+            "image_path": image_path,
+            "duration": duration,
+        })
 
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(manifest_data, f, ensure_ascii=False, indent=2)
+    print(f"전체 낭독 길이: {total_duration:.1f}초")
 
-        print(f"매니페스트 파일 생성 완료: {manifest_path}")
-        print("성공적으로 4단계(음성 및 매니페스트 생성)가 완료되었습니다.")
+    manifest = {
+        "date": today,
+        "title": script.get("title"),
+        "total_duration": total_duration,
+        "slides": manifest_slides,
+    }
+    out_path = MANIFEST_PATH_TEMPLATE.format(date=today)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-    except Exception as e:
-        print(f":rotating_light: [generate_media] 음성 생성 실패: {e}")
-        raise
+    print(f"완료: {out_path}")
 
 
 if __name__ == "__main__":
