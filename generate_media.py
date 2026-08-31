@@ -1,16 +1,18 @@
 """
-1일 1쇼츠 자동화 파이프라인 - 2단계: 음성/이미지 생성 (미니멀 3슬라이드 버전)
+1일 1쇼츠 자동화 파이프라인 - 2단계: 음성/자막 생성 (타이핑 자막 버전)
 
 fetch_script.py가 만든 output/script_{date}.json의 슬라이드 3장마다:
-  1) edge-tts(무료, Microsoft)로 그 슬라이드의 narration_text를 음성으로 만들고
-  2) 그 슬라이드의 display_text를 화면 전체 카드 이미지로 PIL 렌더링
-슬라이드당 audio_path/image_path/duration을 채운 manifest_{date}.json을 만든다.
+  1) edge-tts로 narration_text를 음성으로 만들면서, 무료로 제공되는 단어별
+     타이밍(Word Boundary)도 같이 받는다.
+  2) 그 타이밍 그대로 "말하는 대로 글자가 늘어나는" 타이핑 자막(.ass) 파일을
+     만든다. 텍스트를 미리 그린 정적 이미지 대신, 라벨만 있는 빈 배경
+     이미지 + 실시간 자막(ffmpeg의 ass 필터)으로 렌더링한다.
 
-[미니멀 설계] 슬라이드가 3장뿐이라 API 호출도 3번(전부 무료)뿐이고, 각
-슬라이드는 그 자신의 실제 음성 길이를 그대로 쓰므로(카톡 UI 때처럼 turn이
-많아서 비율 계산하던 방식과 달리) 타이밍 어긋날 일이 없다. 화면도 애니메이션
-없이 카드 하나가 통째로 떠 있다가 다음 카드로 바뀌는 방식이라 렌더링 로직도
-단순하다.
+[언니들 반응 슬라이드의 색상 처리] 이 슬라이드는 "현실언니는 이렇게
+말합니다. ... 공감언니는 이렇게 말합니다. ... 그리고 폭주언니는 이렇게
+말합니다. ..." 하나의 문장을 통째로 낭독하므로, 그 안에서 각 단어가
+누구 구간에 속하는지(현실/공감/폭주) 텍스트 위치로 판별해서 자막 색을
+그 화자 색으로 바꿔가며 표시한다.
 
 필요 패키지:
   pip install edge-tts Pillow --break-system-packages
@@ -18,8 +20,7 @@ fetch_script.py가 만든 output/script_{date}.json의 슬라이드 3장마다:
 필요 폰트(한글 렌더링):
   워크플로에 sudo apt-get install -y fonts-nanum 필요
 
-edge-tts 목소리를 바꾸고 싶으면 VOICE 상수만 수정하면 된다.
-목록 확인: edge-tts --list-voices | grep ko-KR
+edge-tts 목소리/속도를 바꾸고 싶으면 VOICE/RATE 상수만 수정하면 된다.
 """
 
 import os
@@ -43,36 +44,28 @@ SAFE_TOP = 260
 SAFE_BOTTOM = H - 320
 SAFE_LEFT = 100
 SAFE_RIGHT = W - 100
-SAFE_WIDTH = SAFE_RIGHT - SAFE_LEFT
 
 BG_COLOR = (250, 250, 248)
-TEXT_COLOR = (30, 30, 30)
+TEXT_COLOR_ASS = "&H001E1E1E"    # 기본 글자색(검정에 가까움), ASS는 BGR 순서
 LABEL_COLOR = (140, 140, 135)
 
-SLIDE_LABELS = {
-    "story": "사연",
-    "reactions": "언니들의 반응",
-    "question": "여러분의 생각은?",
-}
+SLIDE_LABELS = {"story": "사연", "reactions": "언니들의 반응", "question": "여러분의 생각은?"}
 
-# 슬라이드 종류별로 화자 라벨(현실언니/공감언니/폭주언니) 색을 다르게 표시
-SPEAKER_COLORS = {
-    "현실언니": (55, 138, 221),
-    "공감언니": (99, 153, 34),
-    "폭주언니": (226, 75, 74),
+# ASS 색상은 &HBBGGRR 형식(BGR 순서, RGB 반대)
+SPEAKER_ASS_COLORS = {
+    "현실언니": "&H00DD8A37",  # RGB(55,138,221) -> BGR
+    "공감언니": "&H00229963",  # RGB(99,153,34) -> BGR
+    "폭주언니": "&H004A4BE2",  # RGB(226,75,74) -> BGR
 }
 
 FONT_CANDIDATES_BOLD = [
     "/usr/share/fonts/truetype/nanum/NanumGothicExtraBold.ttf",
     "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
 ]
-FONT_CANDIDATES_REGULAR = [
-    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-]
 
 
-def get_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
-    for path in candidates:
+def get_font(size: int) -> ImageFont.FreeTypeFont:
+    for path in FONT_CANDIDATES_BOLD:
         if os.path.exists(path):
             try:
                 return ImageFont.truetype(path, size)
@@ -84,6 +77,137 @@ def get_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
     )
 
 
+def seconds_to_ass_time(sec: float) -> str:
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = sec % 60
+    return f"{h}:{m:02d}:{s:05.2f}"
+
+
+async def synth_with_timing(text: str, audio_out_path: str) -> list[dict]:
+    """edge-tts로 음성을 만들면서 단어별 타이밍(WordBoundary)도 같이 받는다."""
+    communicate = edge_tts.Communicate(text, VOICE, rate=RATE)
+    word_boundaries = []
+    with open(audio_out_path, "wb") as f:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                f.write(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                word_boundaries.append({
+                    "text": chunk["text"],
+                    "offset": chunk["offset"] / 10_000_000,
+                    "duration": chunk["duration"] / 10_000_000,
+                })
+    return word_boundaries
+
+
+def synth_audio_sync(text: str, audio_out_path: str) -> list[dict]:
+    return asyncio.run(synth_with_timing(text, audio_out_path))
+
+
+def find_speaker_segments(narration_text: str) -> list[tuple[int, str]]:
+    """언니들 반응 슬라이드 안에서 각 화자 구간이 몇 번째 글자부터 시작하는지 찾는다.
+    [(시작 인덱스, 화자이름), ...] 형태, 시작 인덱스 오름차순."""
+    segments = []
+    for speaker in SPEAKER_ASS_COLORS:
+        idx = narration_text.find(speaker)
+        if idx != -1:
+            segments.append((idx, speaker))
+    segments.sort(key=lambda x: x[0])
+    return segments
+
+
+def color_for_position(pos: int, segments: list[tuple[int, str]]) -> str | None:
+    """narration_text 안에서 pos 위치가 어느 화자 구간에 속하는지로 ASS 색상 반환."""
+    current_speaker = None
+    for start, speaker in segments:
+        if pos >= start:
+            current_speaker = speaker
+        else:
+            break
+    return SPEAKER_ASS_COLORS.get(current_speaker) if current_speaker else None
+
+
+MAX_ACCUMULATED_CHARS = 90  # 이 글자수를 넘으면 오래된 단어부터 화면에서 밀어냄(오버플로 방지)
+
+
+def build_typing_ass(
+    word_boundaries: list[dict],
+    total_duration: float,
+    narration_text: str,
+    slide_type: str,
+    out_path: str,
+) -> None:
+    """단어가 하나씩 늘어나는 타이핑 효과 자막(.ass) 파일 생성.
+    slide_type이 'reactions'면 화자 구간별로 글자색을 바꿔가며 표시한다.
+    누적된 글자수가 MAX_ACCUMULATED_CHARS를 넘으면, 실제 카톡처럼 오래된
+    단어부터 화면 밖으로 밀어내서(슬라이딩 윈도우) 화면 오버플로를 막는다."""
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {W}
+PlayResY: {H}
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Malgun Gothic,54,{TEXT_COLOR_ASS},&H000000FF,&H00FAFAFA,&H00FAFAFA,-1,0,0,0,100,100,0,0,1,0,0,5,{SAFE_LEFT},{W - SAFE_RIGHT},0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    lines = [header]
+
+    segments = find_speaker_segments(narration_text) if slide_type == "reactions" else []
+
+    accumulated_parts = []  # (word_text, ass_color_or_None) 리스트
+    cursor = 0
+
+    for i, wb in enumerate(word_boundaries):
+        word = wb["text"]
+        found_at = narration_text.find(word, cursor)
+        pos = found_at if found_at != -1 else cursor
+        cursor = pos + len(word)
+
+        color = color_for_position(pos, segments) if segments else None
+        accumulated_parts.append((word, color))
+
+        # 슬라이딩 윈도우: 누적 글자수가 한도를 넘으면 오래된 단어부터 제거
+        while sum(len(w) + 1 for w, _ in accumulated_parts) > MAX_ACCUMULATED_CHARS and len(accumulated_parts) > 1:
+            accumulated_parts.pop(0)
+
+        start = wb["offset"]
+        end = word_boundaries[i + 1]["offset"] if i + 1 < len(word_boundaries) else total_duration
+
+        text_pieces = []
+        last_color = None
+        for w, c in accumulated_parts:
+            if c != last_color:
+                text_pieces.append(f"{{\\c{c if c else TEXT_COLOR_ASS}&}}")
+                last_color = c
+            safe_w = w.replace("{", "").replace("}", "")
+            text_pieces.append(safe_w + " ")
+        full_text = "".join(text_pieces).strip()
+
+        lines.append(
+            f"Dialogue: 0,{seconds_to_ass_time(start)},{seconds_to_ass_time(end)},"
+            f"Default,,0,0,0,,{full_text}\n"
+        )
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+
+def build_background(slide_type: str, out_path: str) -> None:
+    """텍스트 없이 라벨만 있는 배경 카드 - 본문 자막은 ffmpeg가 실시간으로 그린다."""
+    img = Image.new("RGB", (W, H), BG_COLOR)
+    draw = ImageDraw.Draw(img)
+    label = SLIDE_LABELS.get(slide_type, "")
+    if label:
+        font_label = get_font(32)
+        draw.text((SAFE_LEFT, SAFE_TOP), label, font=font_label, fill=LABEL_COLOR)
+    img.save(out_path)
+
+
 def get_audio_duration(path: str) -> float:
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -93,77 +217,6 @@ def get_audio_duration(path: str) -> float:
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe 실패: {result.stderr}")
     return float(result.stdout.strip())
-
-
-def wrap_text(draw, text: str, font, max_width: int) -> list[str]:
-    words = text.split(" ")
-    lines, current = [], ""
-    for w in words:
-        trial = f"{current} {w}".strip()
-        if draw.textlength(trial, font=font) <= max_width or not current:
-            current = trial
-        else:
-            lines.append(current)
-            current = w
-    if current:
-        lines.append(current)
-    return lines
-
-
-def render_slide(slide: dict, font_body, font_label, line_height: int) -> Image.Image:
-    img = Image.new("RGB", (W, H), BG_COLOR)
-    draw = ImageDraw.Draw(img)
-
-    label = SLIDE_LABELS.get(slide["type"], "")
-    if label:
-        draw.text((SAFE_LEFT, SAFE_TOP), label, font=font_label, fill=LABEL_COLOR)
-
-    body_top = SAFE_TOP + 80
-    if slide["type"] == "reactions":
-        paragraphs = slide["display_text"].split("\n\n")
-    else:
-        paragraphs = slide["display_text"].split("\n")
-
-    # 각 문단(화자별 대사 등)을 줄바꿈까지 반영해서 라인 목록으로 변환
-    all_lines: list[tuple[str, tuple]] = []  # (텍스트, 색상)
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-        speaker_color = TEXT_COLOR
-        for speaker, color in SPEAKER_COLORS.items():
-            if para.startswith(speaker + ":"):
-                speaker_color = color
-                break
-        wrapped = wrap_text(draw, para, font_body, SAFE_WIDTH)
-        for line in wrapped:
-            all_lines.append((line, speaker_color))
-        all_lines.append(("", TEXT_COLOR))  # 문단 사이 여백 한 줄
-
-    if all_lines and all_lines[-1][0] == "":
-        all_lines.pop()
-
-    total_h = len(all_lines) * line_height
-    available_h = SAFE_BOTTOM - body_top
-    y = body_top + max((available_h - total_h) // 2, 0)
-
-    for line, color in all_lines:
-        if line:
-            line_w = draw.textlength(line, font=font_body)
-            x = SAFE_LEFT + (SAFE_WIDTH - line_w) // 2
-            draw.text((x, y), line, font=font_body, fill=color)
-        y += line_height
-
-    return img
-
-
-async def synth_audio_async(text: str, out_path: str) -> None:
-    communicate = edge_tts.Communicate(text, VOICE, rate=RATE)
-    await communicate.save(out_path)
-
-
-def synth_audio(text: str, out_path: str) -> None:
-    asyncio.run(synth_audio_async(text, out_path))
 
 
 def main():
@@ -178,34 +231,35 @@ def main():
     segments_dir = SEGMENTS_DIR_TEMPLATE.format(date=today)
     audio_dir = os.path.join(segments_dir, "audio")
     image_dir = os.path.join(segments_dir, "images")
+    ass_dir = os.path.join(segments_dir, "ass")
     os.makedirs(audio_dir, exist_ok=True)
     os.makedirs(image_dir, exist_ok=True)
-
-    font_body = get_font(FONT_CANDIDATES_BOLD, 52)
-    font_label = get_font(FONT_CANDIDATES_BOLD, 32)
-    line_height = 70
+    os.makedirs(ass_dir, exist_ok=True)
 
     manifest_slides = []
     total_duration = 0.0
 
     for slide in script["slides"]:
         i = slide["index"]
-        print(f"[{i + 1}/{len(script['slides'])}] ({slide['type']}) {slide['narration_text'][:30]}...")
+        print(f"[{i + 1}/{len(script['slides'])}] ({slide['type']}) 음성+타이밍 생성 중...")
 
         audio_path = os.path.join(audio_dir, f"{i:02d}.mp3")
-        synth_audio(slide["narration_text"], audio_path)
+        word_boundaries = synth_audio_sync(slide["narration_text"], audio_path)
         duration = get_audio_duration(audio_path)
         total_duration += duration
 
+        ass_path = os.path.join(ass_dir, f"{i:02d}.ass")
+        build_typing_ass(word_boundaries, duration, slide["narration_text"], slide["type"], ass_path)
+
         image_path = os.path.join(image_dir, f"{i:02d}.png")
-        frame = render_slide(slide, font_body, font_label, line_height)
-        frame.save(image_path)
+        build_background(slide["type"], image_path)
 
         manifest_slides.append({
             "index": i,
             "type": slide["type"],
             "audio_path": audio_path,
             "image_path": image_path,
+            "ass_path": ass_path,
             "duration": duration,
         })
 
