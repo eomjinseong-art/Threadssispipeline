@@ -1,10 +1,10 @@
 """
-1일 1쇼츠 자동화 파이프라인 - 3단계: 영상 조립 (미니멀 3슬라이드 버전)
+1일 1쇼츠 자동화 파이프라인 - 3단계: 영상 조립 (타이핑 자막 버전)
 
-generate_media.py가 만든 output/manifest_{date}.json(슬라이드별 이미지+음성+
-길이)을 받아서, 슬라이드마다 이미지+음성을 합친 세그먼트 3개를 만들고
-순서대로 이어붙여 최종 세로형(9:16) mp4를 만든다. 슬라이드가 3개뿐이라
-BGM 없이도 충분히 자연스럽고, 구조가 단순해서 장애 지점이 거의 없다.
+generate_media.py가 만든 output/manifest_{date}.json(슬라이드별 배경이미지+
+음성+타이핑자막.ass+길이)을 받아서, 슬라이드마다 배경 위에 자막을 실시간으로
+그려 넣은 세그먼트 3개를 만들고 순서대로 이어붙여 최종 세로형(9:16) mp4를
+만든다.
 
 필요 프로그램: ffmpeg, ffprobe
 
@@ -43,11 +43,18 @@ def get_duration(path: str) -> float:
     return float(result.stdout.strip())
 
 
-def build_segment(image_path: str, audio_path: str, out_path: str) -> None:
+def escape_ass_path_for_filter(path: str) -> str:
+    """ffmpeg -vf ass=... 필터에 경로를 넣을 때 콜론/역슬래시를 이스케이프."""
+    p = os.path.abspath(path).replace("\\", "/").replace(":", "\\:")
+    return p
+
+
+def build_segment(image_path: str, audio_path: str, ass_path: str, out_path: str) -> None:
     duration = get_duration(audio_path)
+    ass_escaped = escape_ass_path_for_filter(ass_path)
     vf = (
         f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
-        f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}"
+        f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},ass='{ass_escaped}'"
     )
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     run([
@@ -90,7 +97,7 @@ def main():
         seg_path = os.path.join(segments_dir, f"{slide['index']:02d}.mp4")
         print(f"[{slide['index'] + 1}/{len(manifest['slides'])}] 세그먼트 렌더링: "
               f"{slide['type']} ({slide['duration']:.2f}초)")
-        build_segment(slide["image_path"], slide["audio_path"], seg_path)
+        build_segment(slide["image_path"], slide["audio_path"], slide["ass_path"], seg_path)
         segment_paths.append(seg_path)
 
     final_path = FINAL_PATH_TEMPLATE.format(date=today)
