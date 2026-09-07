@@ -1,34 +1,53 @@
-# 스레드 언니들 자동화 파이프라인
+# 스레드 언니들 자동 배포
 
-## 처음 설정하는 순서
+유튜브 쇼츠 생성/업로드는 **중단**했습니다. 이 저장소는 구글 시트의 사연을 **Threads 글만** 하루 3번 올립니다. 영상, 나레이션, 유튜브 인증은 더 이상 사용하지 않습니다.
 
-1. 이 폴더 전체를 GitHub 새 리포지토리에 push 합니다.
-2. `assets/character_refs/` 에 캐릭터 레퍼런스 이미지 4장을 넣습니다.
-   - clerk_voice.png (알바생)
-   - customer_taxi_voice.png (택시기사)
-   - customer_student_voice.png (취준생)
-   - customer_worker_voice.png (야간근무자)
-3. (선택) `assets/bgm.mp3`, `assets/fonts/subtitle.ttf` 를 넣습니다.
-4. 로컬에서 upload_video.py 를 한 번 실행해 YouTube OAuth 인증을 완료하고
-   client_secret.json / token.json 을 만듭니다. (README 하단 참고)
-5. `dashboard.html` 을 브라우저로 엽니다 (더블클릭). claude.ai 미리보기가 아니라
-   실제 브라우저에서 여는 걸 추천합니다.
-6. 대시보드에서 owner/repo, GitHub PAT을 입력하고 "연결 확인".
-7. 체크리스트에서 빠진 시크릿을 대시보드에서 바로 입력/저장.
-8. 준비가 끝나면 "지금 실행" 버튼.
+## 하는 일
 
-## GitHub PAT 만들기 (fine-grained token 추천)
-GitHub -> Settings -> Developer settings -> Fine-grained tokens -> Generate new token
-- Repository access: 이 리포지토리만 선택
-- Permissions:
-  - Actions: Read and write
-  - Secrets: Read and write
-  - Contents: Read and write (파일 존재 확인용)
+한국시간 **오전 9시 / 오후 6시 / 오후 9시**에 GitHub Actions가:
 
-## YouTube OAuth 최초 인증 (1회, 로컬에서)
+1. (조건부) 사연 재고가 바닥나면 Claude가 시트에 새 사연을 채움
+2. 시트에서 `Status = 대기`인 다음 사연 1개를 고름
+3. 제목 + 사연 + 현실/공감/폭주 언니 반응 + 질문을 Threads 텍스트로 게시
+4. **게시가 성공한 뒤에만** 해당 행을 `완료`로 바꿈
+
+대기 사연이 없으면 이번 회차는 그냥 건너뜁니다. 유튜브 성공 여부와는 상관없습니다.
+
+Threads 글은 500자 제한에 맞춰 사연을 먼저 줄입니다.
+
+## GitHub에서 유튜브를 끄려면
+
+이 파일들을 [Threadssispipeline](https://github.com/eomjinseong-art/Threadssispipeline) `main`에 그대로 올리면 됩니다.
+
+- 새 워크플로: `.github/workflows/daily_threads.yml` (스레드 배포)
+- 옛 워크플로: `.github/workflows/daily_shorts.yml` (스케줄 제거, 영상 작업 안 함)
+
+올리지 않으면 GitHub 쪽 기존 `daily-shorts-pipeline`이 계속 영상을 만들려고 합니다.
+
+## 필요한 시크릿
+
+GitHub → Settings → Secrets and variables → Actions
+
+| 이름 | 필수 | 설명 |
+| --- | --- | --- |
+| `GOOGLE_SHEETS_CREDENTIALS` | 필수 | 시트 서비스 계정 JSON |
+| `THREADS_ACCESS_TOKEN` | 필수 | Threads API 액세스 토큰 |
+| `THREADS_USER_ID` | 필수 | Threads 사용자 ID |
+| `ANTHROPIC_API_KEY` | 선택 | 사연 재고 자동 보충 |
+| `SLACK_WEBHOOK_URL` | 선택 | 실패 알림 |
+
+유튜브 관련 시크릿(`YOUTUBE_TOKEN_JSON` 등)은 더 이상 필요 없습니다.
+
+## 로컬에서 확인
+
+```bash
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests
+GOOGLE_SHEETS_CREDENTIALS='...' python publish_threads.py --dry-run
 ```
-pip install -r requirements.txt
-python upload_video.py   # 브라우저가 열리며 로그인/승인 요청
-```
-성공하면 이 폴더에 token.json 이 생깁니다. client_secret.json 은
-Google Cloud Console에서 미리 다운로드해서 이 폴더에 넣어두세요.
+
+`--dry-run`은 문구만 출력하고 스레드/시트를 건드리지 않습니다.
+
+## 대시보드
+
+`dashboard.html`을 브라우저에서 열면 시크릿 존재 여부를 확인하고, `daily-threads-pipeline`을 수동 실행할 수 있습니다.

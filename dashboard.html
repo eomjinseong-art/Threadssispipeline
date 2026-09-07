@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>야간매점 자동화 콘솔</title>
+<title>스레드 자동 배포 콘솔</title>
 <style>
   :root{
     --bg:#0B0D10; --panel:#14171C; --panel-2:#1B1F26; --border:#2A2F38;
-    --text:#E8E6E0; --text-dim:#8B8880; --amber:#F2B33D; --amber-dim:#8A661F;
+    --text:#E8E6E0; --text-dim:#8B8880; --amber:#F2B33D;
     --green:#5DCB8F; --red:#E2574C; --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
     --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Pretendard,sans-serif;
   }
@@ -17,9 +17,7 @@
     padding:32px 20px 80px; line-height:1.6;
   }
   .wrap{max-width:760px; margin:0 auto;}
-  .sign{
-    display:flex; align-items:center; gap:10px; margin-bottom:6px;
-  }
+  .sign{display:flex; align-items:center; gap:10px; margin-bottom:6px;}
   .dot{width:9px; height:9px; border-radius:50%; background:var(--text-dim); flex-shrink:0;}
   .dot.ok{background:var(--green); box-shadow:0 0 8px var(--green);}
   .dot.bad{background:var(--red); box-shadow:0 0 8px var(--red);}
@@ -33,19 +31,16 @@
     font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:0.6px;
     color:var(--text-dim); margin:0 0 16px;
   }
-  .row{display:flex; gap:10px; margin-bottom:10px;}
-  .row input{flex:1;}
-  input[type=text], input[type=password], textarea{
+  input[type=text], input[type=password]{
     width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--text);
     padding:9px 11px; border-radius:6px; font-size:13px; font-family:var(--mono);
-    resize:vertical;
   }
-  input::placeholder, textarea::placeholder{color:var(--text-dim);}
+  input::placeholder{color:var(--text-dim);}
   label{display:block; font-size:12px; color:var(--text-dim); margin-bottom:5px;}
   .field{margin-bottom:12px;}
   button{
     font-family:var(--sans); font-size:13px; font-weight:600; border:none; border-radius:6px;
-    padding:9px 16px; cursor:pointer; transition:opacity .15s;
+    padding:9px 16px; cursor:pointer;
   }
   button:hover{opacity:0.85;}
   button:disabled{opacity:0.35; cursor:not-allowed;}
@@ -55,7 +50,7 @@
     width:100%; background:var(--amber); color:#1A1300; font-size:15px; padding:14px;
     border-radius:8px;
   }
-  .checklist{display:flex; flex-direction:column; gap:0;}
+  .checklist{display:flex; flex-direction:column;}
   .check-item{
     display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border);
     font-size:13px;
@@ -68,11 +63,8 @@
   }
   .check-mark.ok{background:rgba(93,203,143,0.15); border-color:var(--green); color:var(--green);}
   .check-mark.bad{background:rgba(226,87,76,0.12); border-color:var(--red); color:var(--red);}
-  .check-label{flex:1; color:var(--text);}
+  .check-label{flex:1;}
   .check-optional{color:var(--text-dim); font-size:11px;}
-  .secret-row{display:flex; gap:8px; align-items:center; margin-bottom:8px;}
-  .secret-row input{flex:1;}
-  .secret-row button{white-space:nowrap; padding:9px 12px; font-size:12px;}
   .run-row{display:flex; gap:10px; align-items:center; margin-bottom:14px;}
   .run-row label{margin:0; white-space:nowrap;}
   .run-row input{max-width:120px;}
@@ -81,93 +73,50 @@
     display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--panel-2);
     border:1px solid var(--border); border-radius:8px; font-size:12px; font-family:var(--mono);
   }
-  .run-status{
-    padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; flex-shrink:0;
-  }
+  .run-status{padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; flex-shrink:0;}
   .run-status.success{background:rgba(93,203,143,0.15); color:var(--green);}
   .run-status.failure{background:rgba(226,87,76,0.15); color:var(--red);}
   .run-status.progress{background:rgba(242,179,61,0.15); color:var(--amber);}
   .run-status.other{background:var(--panel); color:var(--text-dim);}
   .run-time{color:var(--text-dim); flex:1;}
   .run-link{color:var(--amber); text-decoration:none;}
-  .run-link:hover{text-decoration:underline;}
   .msg{font-size:12px; margin-top:10px; padding:9px 11px; border-radius:6px; font-family:var(--mono);}
   .msg.error{background:rgba(226,87,76,0.1); color:var(--red); border:1px solid rgba(226,87,76,0.3);}
   .msg.success{background:rgba(93,203,143,0.1); color:var(--green); border:1px solid rgba(93,203,143,0.3);}
   .msg.info{background:var(--panel-2); color:var(--text-dim); border:1px solid var(--border);}
   .hint{font-size:11px; color:var(--text-dim); margin-top:10px;}
-  .hint a{color:var(--amber);}
   .empty{color:var(--text-dim); font-size:13px; text-align:center; padding:16px 0;}
 </style>
 </head>
 <body>
 <div class="wrap">
-
   <div class="sign">
     <span class="dot" id="conn-dot"></span>
-    <h1>야간매점 자동화 콘솔</h1>
+    <h1>스레드 자동 배포 콘솔</h1>
   </div>
-  <p class="sub">1일 1쇼츠 파이프라인 상태를 확인하고, 준비가 끝나면 실행 버튼 하나로 돌립니다.</p>
+  <p class="sub">유튜브 영상은 만들지 않습니다. 구글 시트 사연을 Threads 글로만 올립니다.</p>
 
-  <!-- 연결 설정 -->
   <div class="panel">
     <h2>리포지토리 연결</h2>
     <div class="field">
-      <label>owner/repo (예: myname/shorts-pipeline)</label>
-      <input type="text" id="repo-input" placeholder="owner/repo">
+      <label>owner/repo</label>
+      <input type="text" id="repo-input" placeholder="eomjinseong-art/Threadssispipeline">
     </div>
     <div class="field">
-      <label>GitHub Personal Access Token (repo, workflow 권한 필요)</label>
+      <label>GitHub Personal Access Token (Actions, Secrets 권한)</label>
       <input type="password" id="pat-input" placeholder="ghp_...">
     </div>
     <button class="btn-primary" id="connect-btn">연결 확인</button>
     <div id="connect-msg"></div>
-    <p class="hint">토큰은 이 페이지를 여신 브라우저에만 저장되며, 어디로도 전송되지 않습니다 (GitHub API 호출 시에만 사용).</p>
+    <p class="hint">토큰은 이 브라우저에만 저장되며 GitHub API 호출에만 쓰입니다.</p>
   </div>
 
-  <!-- 준비물 체크리스트 -->
   <div class="panel" id="checklist-panel" style="display:none;">
-    <h2>준비물 체크</h2>
+    <h2>시크릿 체크</h2>
     <div class="checklist" id="checklist"></div>
     <button class="btn-ghost" id="recheck-btn" style="margin-top:14px;">다시 확인</button>
   </div>
 
-  <!-- 설정 (config.json) -->
-  <div class="panel" id="config-panel" style="display:none;">
-    <h2>설정 (config.json)</h2>
-    <p class="hint" style="margin-top:0;">캐릭터, 자막 위치, 타이틀 카드 길이 등을 여기서 바로 고치고 저장하면 다음 실행부터 바로 반영돼요.</p>
-
-    <div class="field"><label>알바생 이름</label><input type="text" id="cfg-clerk-name"></div>
-    <div class="field"><label>알바생 영문 표현 (메타데이터용)</label><input type="text" id="cfg-clerk-name-en"></div>
-    <div class="field"><label>알바생 페르소나</label><textarea id="cfg-clerk-persona" rows="2"></textarea></div>
-    <div class="field"><label>알바생 ElevenLabs Voice ID</label><input type="text" id="cfg-clerk-voice"></div>
-
-    <div class="field"><label>택시기사 이름</label><input type="text" id="cfg-customer-name"></div>
-    <div class="field"><label>택시기사 영문 표현 (메타데이터용)</label><input type="text" id="cfg-customer-name-en"></div>
-    <div class="field"><label>택시기사 페르소나</label><textarea id="cfg-customer-persona" rows="2"></textarea></div>
-    <div class="field"><label>택시기사 ElevenLabs Voice ID</label><input type="text" id="cfg-customer-voice"></div>
-
-    <div class="field"><label>마무리 캐치프레이즈</label><input type="text" id="cfg-catchphrase"></div>
-    <div class="row">
-      <div class="field" style="flex:1;">
-        <label>자막 세로 위치 (0=맨위, 0.5=정중앙, 1=맨아래)</label>
-        <input type="text" id="cfg-subtitle-y">
-      </div>
-      <div class="field" style="flex:1;">
-        <label>타이틀 카드 길이 (초)</label>
-        <input type="text" id="cfg-title-duration">
-      </div>
-    </div>
-    <div class="field"><label>목표 대사 분량 (영어 단어 수, 예: 130-150)</label><input type="text" id="cfg-word-count"></div>
-
-    <div class="row">
-      <button class="btn-ghost" id="config-load-btn">불러오기</button>
-      <button class="btn-primary" id="config-save-btn">저장</button>
-    </div>
-    <div id="config-msg"></div>
-  </div>
-
-  <!-- 실행 -->
   <div class="panel" id="run-panel" style="display:none;">
     <h2>실행</h2>
     <div class="run-row">
@@ -175,16 +124,14 @@
       <input type="text" id="branch-input" value="main">
       <button class="btn-ghost" id="refresh-runs-btn">최근 실행 새로고침</button>
     </div>
-    <button class="btn-run" id="run-btn">지금 실행</button>
+    <button class="btn-run" id="run-btn">지금 스레드에 올리기</button>
     <div id="run-msg"></div>
   </div>
 
-  <!-- 최근 실행 이력 -->
   <div class="panel" id="history-panel" style="display:none;">
     <h2>최근 실행</h2>
     <div class="runs" id="runs-list"><div class="empty">아직 조회한 실행 이력이 없습니다.</div></div>
   </div>
-
 </div>
 
 <script>
@@ -192,67 +139,47 @@
   "use strict";
 
   var REQUIRED_SECRETS = [
-    {name:"ANTHROPIC_API_KEY", label:"Claude API 키"},
-    {name:"ELEVENLABS_API_KEY", label:"ElevenLabs API 키"},
-    {name:"OPENAI_API_KEY", label:"OpenAI API 키 (이미지 생성)"},
-    {name:"YOUTUBE_CLIENT_SECRET_JSON", label:"YouTube client_secret.json 내용"},
-    {name:"YOUTUBE_TOKEN_JSON", label:"YouTube token.json 내용"},
+    {name:"GOOGLE_SHEETS_CREDENTIALS", label:"구글 시트 서비스 계정 JSON"},
+    {name:"THREADS_ACCESS_TOKEN", label:"Threads 액세스 토큰"},
+    {name:"THREADS_USER_ID", label:"Threads 사용자 ID"},
+    {name:"ANTHROPIC_API_KEY", label:"Claude API 키 (사연 재고 보충)", optional:true},
+    {name:"SLACK_WEBHOOK_URL", label:"Slack 웹훅 (실패 알림)", optional:true}
   ];
-
-  var REQUIRED_ASSETS = [
-    {path:"assets/character_refs/clerk_voice.png", label:"알바생 레퍼런스 이미지"},
-    {path:"assets/character_refs/customer_taxi_voice.png", label:"손님(택시기사) 레퍼런스 이미지"},
-    {path:"assets/bgm.mp3", label:"배경음악", optional:true},
-  ];
-
-  var WORKFLOW_FILE = "daily_shorts.yml";
-
+  var WORKFLOW_FILE = "daily_threads.yml";
   var state = { owner:"", repo:"", pat:"", connected:false };
 
-  // --- 저장소(claude.ai 아티팩트 안이면 window.storage, 독립 실행이면 localStorage로 대체) ---
   async function storeGet(key){
-    try{
-      if (window.storage){ var r = await window.storage.get(key, false); return r ? r.value : null; }
-    }catch(e){}
+    try{ if (window.storage){ var r = await window.storage.get(key, false); return r ? r.value : null; } }catch(e){}
     try{ return localStorage.getItem(key); }catch(e){ return null; }
   }
   async function storeSet(key, value){
-    try{
-      if (window.storage){ await window.storage.set(key, value, false); return; }
-    }catch(e){}
+    try{ if (window.storage){ await window.storage.set(key, value, false); return; } }catch(e){}
     try{ localStorage.setItem(key, value); }catch(e){}
   }
-
   function el(id){ return document.getElementById(id); }
-
   function showMsg(container, text, type){
     container.innerHTML = '<div class="msg ' + type + '">' + text + '</div>';
   }
-
-  // --- GitHub API 호출 ---
   async function gh(path, options){
     options = options || {};
     var headers = Object.assign({
       "Authorization": "Bearer " + state.pat,
       "Accept": "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
+      "X-GitHub-Api-Version": "2022-11-28"
     }, options.headers || {});
     return fetch("https://api.github.com" + path, Object.assign({}, options, {headers: headers}));
   }
 
-  // --- 연결 확인 ---
   el("connect-btn").addEventListener("click", async function(){
     var repoVal = el("repo-input").value.trim();
     var patVal = el("pat-input").value.trim();
     var msgBox = el("connect-msg");
-
     var parts = repoVal.split("/");
     if (parts.length !== 2 || !patVal){
       showMsg(msgBox, "owner/repo 형식과 토큰을 모두 입력하세요.", "error");
       return;
     }
     state.owner = parts[0]; state.repo = parts[1]; state.pat = patVal;
-
     showMsg(msgBox, "연결 확인 중...", "info");
     try{
       var res = await gh("/repos/" + state.owner + "/" + state.repo);
@@ -265,91 +192,56 @@
       state.connected = true;
       el("conn-dot").className = "dot ok";
       showMsg(msgBox, "연결됨: " + state.owner + "/" + state.repo, "success");
-
       await storeSet("gh_config", JSON.stringify({owner: state.owner, repo: state.repo, pat: state.pat}));
-
       el("checklist-panel").style.display = "block";
-      el("config-panel").style.display = "block";
       el("run-panel").style.display = "block";
       el("history-panel").style.display = "block";
-
       await runChecklist();
-      await loadConfig();
       await refreshRuns();
     }catch(e){
       state.connected = false;
       el("conn-dot").className = "dot bad";
-      showMsg(msgBox, "요청 중 오류: " + e.message + " (네트워크가 막혀있다면 이 파일을 다운로드해서 브라우저로 직접 열어보세요)", "error");
+      showMsg(msgBox, "요청 중 오류: " + e.message, "error");
     }
   });
 
-  // --- 준비물 체크리스트 ---
   async function runChecklist(){
     var box = el("checklist");
     box.innerHTML = '<div class="empty">확인 중...</div>';
-    var items = [];
-    var warnings = [];
-
     var existingSecretNames = new Set();
+    var warnings = [];
     try{
       var secRes = await gh("/repos/" + state.owner + "/" + state.repo + "/actions/secrets");
       if (secRes.ok){
         var secData = await secRes.json();
         (secData.secrets || []).forEach(function(s){ existingSecretNames.add(s.name); });
       } else {
-        var secErrText = await secRes.text().catch(function(){ return ""; });
-        warnings.push("시크릿 목록 조회 실패: HTTP " + secRes.status + " - " + secErrText.slice(0,150));
+        warnings.push("시크릿 목록 조회 실패: HTTP " + secRes.status);
       }
     }catch(e){
-      warnings.push("시크릿 목록 조회 중 네트워크 오류: " + e.message);
+      warnings.push("시크릿 조회 오류: " + e.message);
     }
-
-    REQUIRED_SECRETS.forEach(function(s){
-      items.push({
-        label: "시크릿: " + s.label,
-        ok: existingSecretNames.has(s.name),
-        optional: !!s.optional,
-      });
-    });
-
-    for (var i=0; i<REQUIRED_ASSETS.length; i++){
-      var a = REQUIRED_ASSETS[i];
-      var ok = false;
-      try{
-        var r = await gh("/repos/" + state.owner + "/" + state.repo + "/contents/" + a.path);
-        ok = r.ok;
-        if (!r.ok && r.status !== 404){
-          var assetErrText = await r.text().catch(function(){ return ""; });
-          warnings.push(a.path + " 조회 실패: HTTP " + r.status + " - " + assetErrText.slice(0,120));
-        }
-      }catch(e){
-        warnings.push(a.path + " 조회 중 네트워크 오류: " + e.message);
-      }
-      items.push({label: "파일: " + a.label, ok: ok, optional: !!a.optional});
-    }
-
     box.innerHTML = "";
-
-    if (warnings.length > 0){
+    if (warnings.length){
       var warnBox = document.createElement("div");
       warnBox.className = "msg error";
       warnBox.style.marginBottom = "12px";
       warnBox.textContent = warnings.join(" / ");
       box.appendChild(warnBox);
     }
-
-    items.forEach(function(it){
+    REQUIRED_SECRETS.forEach(function(s){
       var row = document.createElement("div");
       row.className = "check-item";
+      var ok = existingSecretNames.has(s.name);
       var mark = document.createElement("div");
-      mark.className = "check-mark " + (it.ok ? "ok" : "bad");
-      mark.textContent = it.ok ? "OK" : "X";
+      mark.className = "check-mark " + (ok ? "ok" : "bad");
+      mark.textContent = ok ? "OK" : "X";
       var label = document.createElement("div");
       label.className = "check-label";
-      label.textContent = it.label;
+      label.textContent = "시크릿: " + s.label;
       row.appendChild(mark);
       row.appendChild(label);
-      if (it.optional){
+      if (s.optional){
         var opt = document.createElement("span");
         opt.className = "check-optional";
         opt.textContent = "선택";
@@ -360,114 +252,6 @@
   }
   el("recheck-btn").addEventListener("click", runChecklist);
 
-  // --- config.json 불러오기 ---
-  // GitHub Contents API는 파일 내용을 base64로 준다. sha도 같이 받아둬야
-  // 나중에 저장(PUT)할 때 "다른 사람이 그 사이에 바꾸지 않았는지" 확인에 쓸 수 있다.
-  var configState = { sha: null };
-
-  function b64DecodeUtf8(b64){
-    var binary = atob(b64.replace(/\n/g, ""));
-    var bytes = new Uint8Array(binary.length);
-    for (var i = 0; i < binary.length; i++){ bytes[i] = binary.charCodeAt(i); }
-    return new TextDecoder("utf-8").decode(bytes);
-  }
-  function b64EncodeUtf8(str){
-    var bytes = new TextEncoder().encode(str);
-    var binary = "";
-    for (var i = 0; i < bytes.length; i++){ binary += String.fromCharCode(bytes[i]); }
-    return btoa(binary);
-  }
-
-  async function loadConfig(){
-    var msgBox = el("config-msg");
-    try{
-      var res = await gh("/repos/" + state.owner + "/" + state.repo + "/contents/config.json");
-      if (!res.ok){
-        var errText = await res.text().catch(function(){ return ""; });
-        showMsg(msgBox, "config.json 불러오기 실패: HTTP " + res.status + " - " + errText.slice(0,200), "error");
-        return;
-      }
-      var data = await res.json();
-      configState.sha = data.sha;
-      var cfg = JSON.parse(b64DecodeUtf8(data.content));
-
-      el("cfg-clerk-name").value = cfg.clerk.name || "";
-      el("cfg-clerk-name-en").value = cfg.clerk.name_en || "";
-      el("cfg-clerk-persona").value = cfg.clerk.persona || "";
-      el("cfg-clerk-voice").value = cfg.clerk.elevenlabs_voice_id || "";
-
-      el("cfg-customer-name").value = cfg.customer.name || "";
-      el("cfg-customer-name-en").value = cfg.customer.name_en || "";
-      el("cfg-customer-persona").value = cfg.customer.persona || "";
-      el("cfg-customer-voice").value = cfg.customer.elevenlabs_voice_id || "";
-
-      el("cfg-catchphrase").value = cfg.catchphrase || "";
-      el("cfg-subtitle-y").value = cfg.subtitle_y_ratio != null ? cfg.subtitle_y_ratio : 0.5;
-      el("cfg-title-duration").value = cfg.title_card_duration != null ? cfg.title_card_duration : 2.5;
-      el("cfg-word-count").value = cfg.target_word_count || "130-150";
-    }catch(e){
-      showMsg(msgBox, "config.json 불러오기 중 오류: " + e.message, "error");
-    }
-  }
-  el("config-load-btn").addEventListener("click", loadConfig);
-
-  // --- config.json 저장 ---
-  el("config-save-btn").addEventListener("click", async function(){
-    var msgBox = el("config-msg");
-    var btn = el("config-save-btn");
-
-    var cfg = {
-      clerk: {
-        name: el("cfg-clerk-name").value.trim(),
-        name_en: el("cfg-clerk-name-en").value.trim(),
-        voice_id: "clerk_voice",
-        elevenlabs_voice_id: el("cfg-clerk-voice").value.trim(),
-        persona: el("cfg-clerk-persona").value.trim(),
-      },
-      customer: {
-        name: el("cfg-customer-name").value.trim(),
-        name_en: el("cfg-customer-name-en").value.trim(),
-        voice_id: "customer_taxi_voice",
-        elevenlabs_voice_id: el("cfg-customer-voice").value.trim(),
-        persona: el("cfg-customer-persona").value.trim(),
-      },
-      catchphrase: el("cfg-catchphrase").value.trim(),
-      subtitle_y_ratio: parseFloat(el("cfg-subtitle-y").value) || 0.5,
-      title_card_duration: parseFloat(el("cfg-title-duration").value) || 2.5,
-      target_word_count: el("cfg-word-count").value.trim() || "130-150",
-    };
-
-    if (!configState.sha){
-      showMsg(msgBox, "먼저 '불러오기'를 눌러서 현재 config.json을 가져온 뒤 수정해주세요.", "error");
-      return;
-    }
-
-    btn.disabled = true; btn.textContent = "저장 중...";
-    try{
-      var res = await gh("/repos/" + state.owner + "/" + state.repo + "/contents/config.json", {
-        method: "PUT",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          message: "config.json 업데이트 (대시보드에서)",
-          content: b64EncodeUtf8(JSON.stringify(cfg, null, 2)),
-          sha: configState.sha,
-        }),
-      });
-      if (res.ok){
-        var data = await res.json();
-        configState.sha = data.content.sha;  // 다음 저장을 위해 최신 sha로 갱신
-        showMsg(msgBox, "저장 완료. 다음 실행부터 반영돼요.", "success");
-      } else {
-        var errText = await res.text().catch(function(){ return ""; });
-        showMsg(msgBox, "저장 실패: HTTP " + res.status + " - " + errText.slice(0,200), "error");
-      }
-    }catch(e){
-      showMsg(msgBox, "저장 중 오류: " + e.message, "error");
-    }
-    btn.disabled = false; btn.textContent = "저장";
-  });
-
-  // --- 실행 트리거 ---
   el("run-btn").addEventListener("click", async function(){
     var branch = el("branch-input").value.trim() || "main";
     var msgBox = el("run-msg");
@@ -477,32 +261,31 @@
       var res = await gh("/repos/" + state.owner + "/" + state.repo + "/actions/workflows/" + WORKFLOW_FILE + "/dispatches", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ref: branch}),
+        body: JSON.stringify({ref: branch})
       });
       if (res.ok || res.status === 204){
         showMsg(msgBox, "실행을 요청했습니다. 잠시 후 아래 실행 이력에 나타납니다.", "success");
         setTimeout(refreshRuns, 4000);
       } else {
-        showMsg(msgBox, "실행 요청 실패 (" + res.status + "). 브랜치명과 워크플로우 파일 경로를 확인하세요.", "error");
+        showMsg(msgBox, "실행 요청 실패 (" + res.status + "). 브랜치명과 워크플로 파일을 확인하세요.", "error");
       }
     }catch(e){
       showMsg(msgBox, "요청 중 오류: " + e.message, "error");
     }
-    btn.disabled = false; btn.textContent = "지금 실행";
+    btn.disabled = false; btn.textContent = "지금 스레드에 올리기";
   });
 
-  // --- 실행 이력 조회 ---
   async function refreshRuns(){
     var list = el("runs-list");
     try{
       var res = await gh("/repos/" + state.owner + "/" + state.repo + "/actions/workflows/" + WORKFLOW_FILE + "/runs?per_page=5");
       if (!res.ok){
-        list.innerHTML = '<div class="empty">실행 이력을 불러오지 못했습니다.</div>';
+        list.innerHTML = '<div class="empty">실행 이력을 불러오지 못했습니다. 워크플로 파일이 GitHub에 올라갔는지 확인하세요.</div>';
         return;
       }
       var data = await res.json();
       var runs = data.workflow_runs || [];
-      if (runs.length === 0){
+      if (!runs.length){
         list.innerHTML = '<div class="empty">아직 실행 이력이 없습니다.</div>';
         return;
       }
@@ -510,58 +293,46 @@
       runs.forEach(function(run){
         var card = document.createElement("div");
         card.className = "run-card";
-
         var statusClass = "other";
         var statusText = run.status;
-        if (run.status === "in_progress" || run.status === "queued"){
-          statusClass = "progress"; statusText = "진행중";
-        } else if (run.conclusion === "success"){
-          statusClass = "success"; statusText = "성공";
-        } else if (run.conclusion === "failure"){
-          statusClass = "failure"; statusText = "실패";
-        } else if (run.conclusion){
-          statusText = run.conclusion;
-        }
-
+        if (run.status === "in_progress" || run.status === "queued"){ statusClass = "progress"; statusText = "진행중"; }
+        else if (run.conclusion === "success"){ statusClass = "success"; statusText = "성공"; }
+        else if (run.conclusion === "failure"){ statusClass = "failure"; statusText = "실패"; }
+        else if (run.conclusion){ statusText = run.conclusion; }
         var statusEl = document.createElement("span");
         statusEl.className = "run-status " + statusClass;
         statusEl.textContent = statusText;
-
         var timeEl = document.createElement("span");
         timeEl.className = "run-time";
         timeEl.textContent = new Date(run.created_at).toLocaleString("ko-KR");
-
         var linkEl = document.createElement("a");
         linkEl.className = "run-link";
         linkEl.href = run.html_url;
         linkEl.target = "_blank";
         linkEl.rel = "noopener";
         linkEl.textContent = "로그 보기";
-
         card.appendChild(statusEl);
         card.appendChild(timeEl);
         card.appendChild(linkEl);
         list.appendChild(card);
       });
-
-      var hasInProgress = runs.some(function(r){ return r.status === "in_progress" || r.status === "queued"; });
-      if (hasInProgress){ setTimeout(refreshRuns, 15000); }
+      if (runs.some(function(r){ return r.status === "in_progress" || r.status === "queued"; })){
+        setTimeout(refreshRuns, 15000);
+      }
     }catch(e){
       list.innerHTML = '<div class="empty">실행 이력을 불러오는 중 오류가 발생했습니다.</div>';
     }
   }
   el("refresh-runs-btn").addEventListener("click", refreshRuns);
 
-  // --- 초기 로드: 저장된 연결 정보 복원 ---
   (async function init(){
     var saved = await storeGet("gh_config");
-    if (saved){
-      try{
-        var cfg = JSON.parse(saved);
-        el("repo-input").value = (cfg.owner || "") + (cfg.repo ? "/" + cfg.repo : "");
-        el("pat-input").value = cfg.pat || "";
-      }catch(e){}
-    }
+    if (!saved) return;
+    try{
+      var cfg = JSON.parse(saved);
+      el("repo-input").value = (cfg.owner || "") + (cfg.repo ? "/" + cfg.repo : "");
+      el("pat-input").value = cfg.pat || "";
+    }catch(e){}
   })();
 })();
 </script>
