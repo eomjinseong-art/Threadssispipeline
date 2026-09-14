@@ -1,4 +1,4 @@
-anthropic
+openai
 gspread
 google-auth
 requests
