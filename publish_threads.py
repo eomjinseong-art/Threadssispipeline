@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 import gspread
 import requests
@@ -99,6 +100,38 @@ def build_threads_text(row: dict) -> str:
     return without_story[: THREADS_MAX_CHARS - 3] + "..."
 
 
+def _container_ready(status: str | None) -> bool:
+    return (status or "").upper() in {"FINISHED", "PUBLISHED"}
+
+
+def _is_media_not_found(payload: dict) -> bool:
+    err = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(err, dict):
+        return False
+    return err.get("code") == 24 or err.get("error_subcode") == 4279009 or (
+        str(err.get("error_user_title", "")).lower() == "media not found"
+    )
+
+
+def _wait_for_container(creation_id: str, access_token: str, timeout_sec: int = 60) -> None:
+    deadline = time.time() + timeout_sec
+    last_payload: dict | None = None
+    while time.time() < deadline:
+        resp = requests.get(
+            f"{THREADS_API_BASE}/{creation_id}",
+            params={"fields": "status,error_message", "access_token": access_token},
+            timeout=30,
+        )
+        last_payload = resp.json()
+        status = str(last_payload.get("status", ""))
+        if _container_ready(status):
+            return
+        if status.upper() in {"ERROR", "EXPIRED"}:
+            raise RuntimeError(f"스레드 컨테이너 준비 실패: {last_payload}")
+        time.sleep(2)
+    raise RuntimeError(f"스레드 컨테이너 준비 타임아웃: {last_payload}")
+
+
 def post_to_threads(text: str) -> str:
     access_token = os.environ.get("THREADS_ACCESS_TOKEN")
     user_id = os.environ.get("THREADS_USER_ID")
@@ -114,16 +147,27 @@ def post_to_threads(text: str) -> str:
     if "id" not in create_data:
         raise RuntimeError(f"스레드 컨테이너 생성 실패: {create_data}")
 
-    publish_resp = requests.post(
-        f"{THREADS_API_BASE}/{user_id}/threads_publish",
-        data={"creation_id": create_data["id"], "access_token": access_token},
-        timeout=30,
-    )
-    publish_data = publish_resp.json()
-    if "id" not in publish_data:
-        raise RuntimeError(f"스레드 퍼블리시 실패: {publish_data}")
+    creation_id = str(create_data["id"])
+    _wait_for_container(creation_id, access_token)
 
-    return str(publish_data["id"])
+    last_publish: dict | None = None
+    for attempt in range(1, 5):
+        publish_resp = requests.post(
+            f"{THREADS_API_BASE}/{user_id}/threads_publish",
+            data={"creation_id": creation_id, "access_token": access_token},
+            timeout=30,
+        )
+        publish_data = publish_resp.json()
+        last_publish = publish_data
+        if "id" in publish_data:
+            return str(publish_data["id"])
+        if _is_media_not_found(publish_data) and attempt < 4:
+            time.sleep(2 * attempt)
+            _wait_for_container(creation_id, access_token, timeout_sec=30)
+            continue
+        break
+
+    raise RuntimeError(f"스레드 퍼블리시 실패: {last_publish}")
 
 
 def mark_complete(ws: gspread.Worksheet, row_index: int) -> None:
