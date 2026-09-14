@@ -6,4 +6,5 @@ venv/
 output/
 token.json
 client_secret.json
+threads_token.json
 .DS_Store

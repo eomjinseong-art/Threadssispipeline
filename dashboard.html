@@ -92,9 +92,9 @@
 <div class="wrap">
   <div class="sign">
     <span class="dot" id="conn-dot"></span>
-    <h1>스레드 자동 배포 콘솔</h1>
+    <h1>쇼츠 자동 배포 콘솔</h1>
   </div>
-  <p class="sub">유튜브 영상은 만들지 않습니다. 구글 시트 사연을 Threads 글로만 올립니다.</p>
+  <p class="sub">구글 시트 대기 사연으로 Shorts를 만들고 YouTube에 올립니다. Threads 스케줄 배포는 수동입니다.</p>
 
   <div class="panel">
     <h2>리포지토리 연결</h2>
@@ -124,7 +124,7 @@
       <input type="text" id="branch-input" value="main">
       <button class="btn-ghost" id="refresh-runs-btn">최근 실행 새로고침</button>
     </div>
-    <button class="btn-run" id="run-btn">지금 스레드에 올리기</button>
+    <button class="btn-run" id="run-btn">지금 쇼츠 만들기</button>
     <div id="run-msg"></div>
   </div>
 
@@ -140,12 +140,16 @@
 
   var REQUIRED_SECRETS = [
     {name:"GOOGLE_SHEETS_CREDENTIALS", label:"구글 시트 서비스 계정 JSON"},
-    {name:"THREADS_ACCESS_TOKEN", label:"Threads 액세스 토큰"},
-    {name:"THREADS_USER_ID", label:"Threads 사용자 ID"},
-    {name:"ANTHROPIC_API_KEY", label:"Claude API 키 (사연 재고 보충)", optional:true},
+    {name:"YOUTUBE_TOKEN_JSON", label:"YouTube token.json"},
+    {name:"YOUTUBE_CLIENT_SECRET_JSON", label:"YouTube OAuth 클라이언트 JSON", optional:true},
+    {name:"YOUTUBE_REFRESH_TOKEN", label:"YouTube refresh token", optional:true},
+    {name:"EXPECTED_YOUTUBE_CHANNEL_ID", label:"업로드 허용 채널 ID", optional:true},
+    {name:"OPENAI_API_KEY", label:"OpenAI API 키 (사연 재고 보충)", optional:true},
+    {name:"THREADS_ACCESS_TOKEN", label:"Threads 액세스 토큰 (홍보)", optional:true},
+    {name:"THREADS_USER_ID", label:"Threads 사용자 ID (홍보)", optional:true},
     {name:"SLACK_WEBHOOK_URL", label:"Slack 웹훅 (실패 알림)", optional:true}
   ];
-  var WORKFLOW_FILE = "daily_threads.yml";
+  var WORKFLOW_FILE = "daily_shorts.yml";
   var state = { owner:"", repo:"", pat:"", connected:false };
 
   async function storeGet(key){
@@ -272,7 +276,7 @@
     }catch(e){
       showMsg(msgBox, "요청 중 오류: " + e.message, "error");
     }
-    btn.disabled = false; btn.textContent = "지금 스레드에 올리기";
+    btn.disabled = false; btn.textContent = "지금 쇼츠 만들기";
   });
 
   async function refreshRuns(){
