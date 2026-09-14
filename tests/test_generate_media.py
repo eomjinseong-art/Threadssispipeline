@@ -7,13 +7,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from generate_media import (
     EDGE_TTS_BOUNDARY,
+    MAX_CAPTION_LINES,
     SPEAKER_ASS_COLORS,
     build_background,
     build_typing_ass,
     color_for_position,
     find_speaker_segments,
+    format_caption_ass,
     make_communicate,
     seconds_to_ass_time,
+    wrap_caption_lines,
 )
 from shorts_style import BG_COLOR
 
@@ -62,6 +65,40 @@ class GenerateMediaHelperTests(unittest.TestCase):
                 spoken = line.split(",", 9)[-1].strip()
                 self.assertTrue(spoken, "ASS Dialogue 텍스트가 비면 자막이 안 나옵니다")
             self.assertIn("안녕하세요", text)
+
+    def test_caption_window_is_at_most_three_lines(self):
+        long = " ".join(f"단어{i}" for i in range(40))
+        lines = wrap_caption_lines(long)
+        self.assertLessEqual(len(lines), MAX_CAPTION_LINES)
+        self.assertGreaterEqual(len(lines), 1)
+
+    def test_reactions_reset_so_speakers_do_not_share_one_wall(self):
+        narration = (
+            "현실언니는 이렇게 말합니다. 선 그으세요. "
+            "공감언니는 이렇게 말합니다. 힘들었죠. "
+            "그리고 폭주언니는 이렇게 말합니다. 나가세요."
+        )
+        words = narration.split()
+        boundaries = [
+            {"text": w, "offset": i * 0.2, "duration": 0.2} for i, w in enumerate(words)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            ass_path = Path(tmp) / "re.ass"
+            build_typing_ass(boundaries, 20.0, narration, "reactions", str(ass_path))
+            text = ass_path.read_text(encoding="utf-8")
+            dialogues = [ln.split(",", 9)[-1] for ln in text.splitlines() if ln.startswith("Dialogue:")]
+            self.assertTrue(dialogues)
+            # 한 이벤트에 세 화자 색이 동시에 있으면 벽이 된 것
+            for spoken in dialogues:
+                color_hits = sum(1 for token in SPEAKER_ASS_COLORS.values() if token in spoken)
+                self.assertLessEqual(color_hits, 1, spoken)
+            self.assertIn("\\an8", text)
+
+    def test_format_caption_uses_n_breaks_not_one_blob(self):
+        parts = [(f"단어{i}", None) for i in range(12)]
+        formatted = format_caption_ass(parts)
+        self.assertIn(r"\N", formatted)
+        self.assertLessEqual(formatted.count(r"\N"), MAX_CAPTION_LINES - 1)
 
     def test_background_is_paper_color(self):
         from PIL import Image

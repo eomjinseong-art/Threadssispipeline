@@ -1,9 +1,8 @@
-"""구글 시트 대기 사연 1개 → 세로 Shorts 영상 → YouTube 업로드 오케스트레이터.
+"""구글 시트 YouTube 대기 사연 1개 → 세로 Shorts → YouTube 업로드.
 
-실패 시 시트 Status는 '대기'로 남겨 다음 스케줄이 같은 사연을 재시도한다.
-YouTube 업로드가 성공한 뒤에만 행을 '완료'로 바꾼다.
-스레드 홍보는 업로드 성공 후 최선을 다해 시도하며, 실패해도 런을 실패 처리하지 않고
-시트를 되돌리지도 않는다.
+Threads `Status`와 무관하다. `YouTube` 열이 대기인 가장 작은 EP를 고른다.
+업로드가 성공한 뒤에만 YouTube=`완료`. 실패하면 YouTube=`대기`로 남겨 재시도한다.
+이 파이프라인은 Threads에 글을 올리지 않는다.
 """
 
 from __future__ import annotations
@@ -11,14 +10,9 @@ from __future__ import annotations
 import argparse
 
 from assemble_video import assemble_from_manifest
-from fetch_script import fetch_pending_script, load_worksheet, mark_row_complete
+from fetch_script import fetch_pending_script, load_worksheet, mark_youtube_complete
 from generate_media import generate_media
-from upload_video import (
-    build_threads_text,
-    notify_failure,
-    post_to_threads,
-    upload_short,
-)
+from upload_video import notify_failure, upload_short
 
 
 def run(
@@ -42,7 +36,7 @@ def run(
         ws = load_worksheet()
         row_index, script, script_path = fetch_pending_script(ws)
         if row_index is None:
-            print("처리할 대기 상태 에피소드가 없습니다. 이번 회차는 건너뜁니다.")
+            print("YouTube 대기 에피소드가 없습니다. 이번 회차는 건너뜁니다.")
             return 0
         print(f"대상 행 {row_index}: {script['title']}")
 
@@ -53,34 +47,28 @@ def run(
     video_path = assemble_from_manifest(manifest_path, script_path=script_path)
 
     if dry_run or skip_upload:
-        print(f"dry-run/skip-upload: 업로드·시트 완료 표시를 생략합니다. 영상: {video_path}")
+        print(f"dry-run/skip-upload: 업로드·YouTube 완료 표시를 생략합니다. 영상: {video_path}")
         return 0
 
     print("[youtube] Shorts 업로드")
     video_id = upload_short(video_path, script_path)
 
     if ws is not None and isinstance(row_index, int):
-        mark_row_complete(ws, row_index)
-        print(f"시트 행 {row_index} 을 완료로 표시했습니다.")
+        mark_youtube_complete(ws, row_index)
+        print(f"시트 행 {row_index} YouTube 열을 완료로 표시했습니다. Status(Threads)는 변경하지 않았습니다.")
     else:
         print("시트에 연결되지 않은 로컬 스크립트라 완료 표시를 건너뜁니다.")
-
-    print("[threads] 홍보 글 (실패해도 무시)")
-    try:
-        post_to_threads(build_threads_text(script, video_id=video_id))
-    except Exception as exc:
-        print(f"  [경고] 스레드 홍보 실패(런은 성공 유지, 시트도 완료 유지): {exc}")
 
     print(f"파이프라인 완료: https://youtube.com/shorts/{video_id}")
     return 0
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="대기 사연 1개를 Shorts로 만들어 YouTube에 올립니다.")
+    parser = argparse.ArgumentParser(description="YouTube 대기 사연 1개를 Shorts로 올려 waitmybabe에 올립니다.")
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="영상까지 만들고 업로드/시트 완료 표시는 하지 않습니다.",
+        help="영상까지 만들고 업로드/YouTube 완료 표시는 하지 않습니다.",
     )
     parser.add_argument(
         "--skip-upload",

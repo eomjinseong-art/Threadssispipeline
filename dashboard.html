@@ -94,7 +94,7 @@
     <span class="dot" id="conn-dot"></span>
     <h1>쇼츠 자동 배포 콘솔</h1>
   </div>
-  <p class="sub">구글 시트 대기 사연으로 Shorts를 만들고 YouTube에 올립니다. Threads 스케줄 배포는 수동입니다.</p>
+  <p class="sub">YouTube 열 대기 사연을 waitmybabe Shorts로 올립니다. Threads Status와 무관하고, Threads에는 올리지 않습니다.</p>
 
   <div class="panel">
     <h2>리포지토리 연결</h2>
@@ -145,8 +145,6 @@
     {name:"YOUTUBE_REFRESH_TOKEN", label:"YouTube refresh token", optional:true},
     {name:"EXPECTED_YOUTUBE_CHANNEL_ID", label:"업로드 허용 채널 ID", optional:true},
     {name:"OPENAI_API_KEY", label:"OpenAI API 키 (사연 재고 보충)", optional:true},
-    {name:"THREADS_ACCESS_TOKEN", label:"Threads 액세스 토큰 (홍보)", optional:true},
-    {name:"THREADS_USER_ID", label:"Threads 사용자 ID (홍보)", optional:true},
     {name:"SLACK_WEBHOOK_URL", label:"Slack 웹훅 (실패 알림)", optional:true}
   ];
   var WORKFLOW_FILE = "daily_shorts.yml";

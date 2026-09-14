@@ -118,7 +118,8 @@ class AssembleHelperTests(unittest.TestCase):
             _extract_frame(str(seg), 0.8, str(frame))
             img = Image.open(frame).convert("RGB")
             w, h = img.size
-            box = img.crop((w // 4, h // 2 - 120, w * 3 // 4, h // 2 + 120))
+            # Alignment 8 + MarginV 520: 자막은 화면 위쪽 고정 (가운데 재정렬 안 함)
+            box = img.crop((w // 8, 480, w * 7 // 8, 820))
             dark = sum(1 for r, g, b in box.getdata() if (r + g + b) / 3 < 90)
             self.assertGreater(dark, 80, "자막이 타지 않은 것 같습니다")
 
