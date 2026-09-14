@@ -2,27 +2,27 @@
 쓰레드 언니들 사연 자동화 - 사연 재고 자동 보충
 
 구글 시트에서 Status가 "대기"인 사연이 일정 개수 미만이면
-Claude로 새 사연을 생성해 시트 끝에 추가한다.
+OpenAI(ChatGPT)로 새 사연을 생성해 시트 끝에 추가한다.
 
 필요 환경변수:
-  ANTHROPIC_API_KEY
+  OPENAI_API_KEY
   GOOGLE_SHEETS_CREDENTIALS
 """
 
 import os
 import json
-import sys
 
 import gspread
 from google.oauth2.service_account import Credentials
-from anthropic import Anthropic
+from openai import OpenAI
 
 SHEET_ID = "1AOvI5ExbZ4j_BJHZvZnWnXExCDOebjxgsiRr7SWfuDE"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-BATCH_SIZE = 50              # 한 번에 추가할 사연 수
-MIN_PENDING = 10             # 대기 사연이 이 개수 미만이면 보충
+BATCH_SIZE = 50
+MIN_PENDING = 10
 PENDING_STATUS = "대기"
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
 SYSTEM_PROMPT = """당신은 한국어 쓰레드(Threads)용 "사연" 콘텐츠 작가입니다.
 여성들이 직장·연애·가족에게 사연을 올리는 톤을 씁니다.
@@ -57,7 +57,6 @@ def load_client() -> gspread.Client:
 
 
 def ep_to_int(raw) -> int | None:
-    """EP 셀 값을 정수로 변환. "030", "30", 30 등 어떤 형태로 들어와도 처리."""
     s = str(raw).strip()
     if not s:
         return None
@@ -76,7 +75,6 @@ def count_pending(records: list[dict]) -> int:
 
 
 def should_generate(records: list[dict]) -> tuple[bool, list[str], int, int]:
-    """(생성해야 하는지, 기존 제목 목록, 다음 EP 번호, 현재 대기 수) 반환."""
     pending = count_pending(records)
     ep_numbers = [n for n in (ep_to_int(r.get("EP", "")) for r in records) if n is not None]
     max_ep_num = max(ep_numbers, default=0)
@@ -89,10 +87,10 @@ def should_generate(records: list[dict]) -> tuple[bool, list[str], int, int]:
     return True, titles, next_ep_num, pending
 
 
-CHUNK_SIZE = 10  # 한 번의 API 호출에 요청할 개수
+CHUNK_SIZE = 10
 
 
-def generate_chunk(client: Anthropic, existing_titles: list[str], count: int) -> list[dict]:
+def generate_chunk(client: OpenAI, existing_titles: list[str], count: int) -> list[dict]:
     used_titles_text = "\n".join(f"- {t}" for t in existing_titles) or "(없음)"
     user_prompt = (
         f"아래는 이미 쓴 제목 목록입니다. 겹치지 않는 완전히 새로운 사연을 "
@@ -100,32 +98,42 @@ def generate_chunk(client: Anthropic, existing_titles: list[str], count: int) ->
         f"JSON 배열 {count}개, 스키마 그대로 지켜주세요."
     )
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8000,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
+    response = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        temperature=0.9,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT + "\n\n응답은 {\"stories\": [...]} 형태의 JSON 객체로 주세요."},
+            {"role": "user", "content": user_prompt},
+        ],
     )
-
-    raw = "".join(block.text for block in message.content if block.type == "text")
+    raw = response.choices[0].message.content or ""
     raw = raw.strip().removeprefix("```json").removesuffix("```").strip()
     data = json.loads(raw)
 
+    if isinstance(data, dict):
+        if "stories" in data and isinstance(data["stories"], list):
+            data = data["stories"]
+        else:
+            # fallback: first list value
+            for v in data.values():
+                if isinstance(v, list):
+                    data = v
+                    break
     if not isinstance(data, list):
         raise ValueError(f"예상치 못한 응답 형식(배열이 아님): {type(data)}")
 
     return data
 
 
-def generate_stories(client: Anthropic, existing_titles: list[str], count: int) -> list[dict]:
-    """count개를 CHUNK_SIZE로 나눠 여러 번 요청해 잘림을 줄인다."""
+def generate_stories(client: OpenAI, existing_titles: list[str], count: int) -> list[dict]:
     all_stories: list[dict] = []
     titles_pool = list(existing_titles)
     remaining = count
 
     while remaining > 0:
         chunk_size = min(CHUNK_SIZE, remaining)
-        print(f"  생성 중... ({len(all_stories)}/{count})")
+        print(f"  생성 중... ({len(all_stories)}/{count}) model={OPENAI_MODEL}")
         chunk = generate_chunk(client, titles_pool, chunk_size)
 
         if not chunk:
@@ -148,10 +156,12 @@ def validate_story(story: dict, idx: int) -> list[str]:
     for key in required:
         if key not in story or not story[key]:
             errors.append(f"{idx}번째 항목: '{key}' 필드 없음/비어있음")
-    if "story_lines" in story:
+    if "story_lines" in story and isinstance(story["story_lines"], list):
         n = len(story["story_lines"])
         if not (5 <= n <= 9):
             errors.append(f"{idx}번째 항목: story_lines {n}줄 (권장 6~8줄)")
+    elif "story_lines" in story:
+        errors.append(f"{idx}번째 항목: story_lines가 배열이 아님")
     return errors
 
 
@@ -190,13 +200,13 @@ def main():
 
     print(
         f"대기 사연 {pending}개 < {MIN_PENDING}. "
-        f"EP.{next_ep_num:03d}부터 {BATCH_SIZE}개 생성 시작..."
+        f"EP.{next_ep_num:03d}부터 {BATCH_SIZE}개 생성 시작... (OpenAI)"
     )
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise SystemExit("ANTHROPIC_API_KEY 환경변수가 필요합니다.")
-    client = Anthropic(api_key=api_key)
+        raise SystemExit("OPENAI_API_KEY 환경변수가 필요합니다.")
+    client = OpenAI(api_key=api_key)
 
     stories = generate_stories(client, existing_titles, BATCH_SIZE)
 
