@@ -69,30 +69,56 @@ def _is_ci() -> bool:
     return bool(os.environ.get("GITHUB_ACTIONS") or os.environ.get("CI"))
 
 
-def _parse_json_env(raw: str) -> dict:
+def parse_first_json_value(raw: str):
+    """시크릿에 붙은 trailing junk를 무시하고 첫 JSON 값만 읽는다.
+
+    GitHub secret에 객체 뒤에 설명/두 번째 블록이 붙어 있으면
+    json.loads 가 Extra data 로 죽는다. raw_decode 로 첫 값만 취한다.
+    완전히 파싱 불가면 None.
+    """
     text = (raw or "").strip()
     if not text:
-        return {}
-    return json.loads(text)
+        return None
+    decoder = json.JSONDecoder()
+    try:
+        value, _end = decoder.raw_decode(text)
+        return value
+    except json.JSONDecodeError:
+        for i, ch in enumerate(text):
+            if ch in "{[":
+                try:
+                    value, _end = decoder.raw_decode(text[i:])
+                    return value
+                except json.JSONDecodeError:
+                    break
+        return None
 
 
 def write_auth_files_from_env(
     token_path: str = TOKEN_PATH,
     client_secret_path: str = CLIENT_SECRET_PATH,
 ) -> None:
-    """GitHub Actions 시크릿을 token.json / client_secret.json 으로 복원한다."""
+    """GitHub Actions 시크릿을 token.json / client_secret.json 으로 복원한다.
+
+    YOUTUBE_CLIENT_SECRET_JSON 은 선택이다. 파싱에 실패해도
+    YOUTUBE_TOKEN_JSON / YOUTUBE_REFRESH_TOKEN 이 있으면 헤드리스 인증을 계속한다.
+    """
     token_raw = os.environ.get("YOUTUBE_TOKEN_JSON", "").strip()
     client_raw = os.environ.get("YOUTUBE_CLIENT_SECRET_JSON", "").strip()
     refresh = os.environ.get("YOUTUBE_REFRESH_TOKEN", "").strip()
 
     client_info: dict = {}
     if client_raw:
-        with open(client_secret_path, "w", encoding="utf-8") as f:
-            f.write(client_raw)
-        try:
-            client_info = json.loads(client_raw)
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"YOUTUBE_CLIENT_SECRET_JSON 이 올바른 JSON이 아닙니다: {exc}") from exc
+        parsed_client = parse_first_json_value(client_raw)
+        if isinstance(parsed_client, dict):
+            client_info = parsed_client
+            with open(client_secret_path, "w", encoding="utf-8") as f:
+                json.dump(client_info, f)
+        else:
+            print(
+                "  [경고] YOUTUBE_CLIENT_SECRET_JSON 을 파싱하지 못했습니다. "
+                "token/refresh 로 헤드리스 인증을 계속합니다."
+            )
 
     installed = {}
     if isinstance(client_info, dict):
@@ -100,12 +126,14 @@ def write_auth_files_from_env(
 
     token_data: dict = {}
     if token_raw:
-        try:
-            parsed = json.loads(token_raw)
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"YOUTUBE_TOKEN_JSON 이 올바른 JSON이 아닙니다: {exc}") from exc
-        if isinstance(parsed, dict):
-            token_data = parsed
+        parsed_token = parse_first_json_value(token_raw)
+        if isinstance(parsed_token, dict):
+            token_data = parsed_token
+        else:
+            print(
+                "  [경고] YOUTUBE_TOKEN_JSON 을 파싱하지 못했습니다. "
+                "refresh token 만으로 진행을 시도합니다."
+            )
 
     if refresh:
         token_data["refresh_token"] = refresh
@@ -114,7 +142,10 @@ def write_auth_files_from_env(
         token_data.setdefault("client_id", installed["client_id"])
     if installed.get("client_secret"):
         token_data.setdefault("client_secret", installed["client_secret"])
-    token_data.setdefault("token_uri", installed.get("token_uri") or "https://oauth2.googleapis.com/token")
+    if token_data:
+        token_data.setdefault(
+            "token_uri", installed.get("token_uri") or "https://oauth2.googleapis.com/token"
+        )
 
     if token_data.get("refresh_token") or token_data.get("token"):
         with open(token_path, "w", encoding="utf-8") as f:
