@@ -8,3 +8,10 @@ token.json
 client_secret.json
 threads_token.json
 .DS_Store
+
+# Keep EP.102 QA render downloadable from GitHub (do not ignore these paths).
+!tests/qa-ep102/
+!tests/qa-ep102/final_row102.mp4
+!tests/qa-ep102/intro.png
+!tests/qa-ep102/story.png
+!tests/qa-ep102/reactions.png
