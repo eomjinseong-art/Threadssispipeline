@@ -12,6 +12,7 @@ from upload_video import (
     build_metadata,
     build_threads_text,
     get_credentials,
+    parse_first_json_value,
     shorts_title,
     verify_channel,
     write_auth_files_from_env,
@@ -83,6 +84,51 @@ class UploadHelperTests(unittest.TestCase):
             self.assertEqual(token["token"], "ya29.old")
             self.assertEqual(token["client_id"], "cid.apps.googleusercontent.com")
             self.assertTrue(secret_path.is_file())
+
+    def test_client_secret_trailing_extra_data_does_not_raise(self):
+        """Actions 시크릿에 JSON 객체 + 뒤 텍스트가 붙어 Extra data 가 나던 경우."""
+        secret_obj = {
+            "installed": {
+                "client_id": "cid.apps.googleusercontent.com",
+                "client_secret": "csec",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        }
+        trailing = json.dumps(secret_obj, indent=2) + "\n\n# pasted note\n{\"extra\": true}\n"
+        self.assertIsInstance(parse_first_json_value(trailing), dict)
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(trailing)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            token_path = Path(tmp) / "token.json"
+            secret_path = Path(tmp) / "client_secret.json"
+            env = {
+                "YOUTUBE_TOKEN_JSON": json.dumps({"token": "ya29.ok", "refresh_token": "rt"}),
+                "YOUTUBE_REFRESH_TOKEN": "rt-backup",
+                "YOUTUBE_CLIENT_SECRET_JSON": trailing,
+            }
+            with patch.dict(os.environ, env, clear=False):
+                write_auth_files_from_env(str(token_path), str(secret_path))
+            token = json.loads(token_path.read_text(encoding="utf-8"))
+            self.assertEqual(token["token"], "ya29.ok")
+            self.assertEqual(token["refresh_token"], "rt-backup")
+            self.assertEqual(token["client_id"], "cid.apps.googleusercontent.com")
+            written_secret = json.loads(secret_path.read_text(encoding="utf-8"))
+            self.assertEqual(written_secret["installed"]["client_id"], "cid.apps.googleusercontent.com")
+
+    def test_unparseable_client_secret_warns_and_keeps_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            token_path = Path(tmp) / "token.json"
+            secret_path = Path(tmp) / "client_secret.json"
+            env = {
+                "YOUTUBE_TOKEN_JSON": json.dumps({"token": "ya29.ok", "refresh_token": "rt"}),
+                "YOUTUBE_CLIENT_SECRET_JSON": "not-json-at-all <<<",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                write_auth_files_from_env(str(token_path), str(secret_path))
+            token = json.loads(token_path.read_text(encoding="utf-8"))
+            self.assertEqual(token["token"], "ya29.ok")
+            self.assertFalse(secret_path.exists())
 
     def test_headless_without_token_aborts(self):
         with tempfile.TemporaryDirectory() as tmp:
