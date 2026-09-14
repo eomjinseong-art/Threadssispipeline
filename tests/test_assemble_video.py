@@ -167,9 +167,10 @@ class AssembleHelperTests(unittest.TestCase):
         self.assertLessEqual(dur, 15.0)
 
     def test_bgm_mix_is_audible_under_speech(self):
-        self.assertGreaterEqual(BGM_PRE_DUCK_VOLUME, 0.32)
-        self.assertLessEqual(BGM_PRE_DUCK_VOLUME, 0.38)
-        self.assertGreaterEqual(BGM_FLOOR_WEIGHT, 0.28)
+        self.assertGreaterEqual(BGM_PRE_DUCK_VOLUME, 0.18)
+        self.assertLessEqual(BGM_PRE_DUCK_VOLUME, 0.20)
+        self.assertGreaterEqual(BGM_FLOOR_WEIGHT, 0.12)
+        self.assertLessEqual(BGM_FLOOR_WEIGHT, 0.15)
         source = inspect.getsource(mix_bgm)
         self.assertIn("BGM_PRE_DUCK_VOLUME", source)
         self.assertIn("BGM_FLOOR_WEIGHT", source)

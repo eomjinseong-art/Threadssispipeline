@@ -51,11 +51,11 @@ FFMPEG_AUDIO_ARGS = [
     "-ac", str(AUDIO_CHANNELS),
 ]
 
-# 프리덕 볼륨: 음악으로 들릴 정도. TTS는 위에, 덕 바닥은 남긴다.
-BGM_PRE_DUCK_VOLUME = 0.36
-BGM_FALLBACK_VOLUME = 0.34
-BGM_DUCKED_WEIGHT = 0.68
-BGM_FLOOR_WEIGHT = 0.32
+# 프리덕 볼륨: 희미하게 들리게. TTS는 위에, 덕 바닥은 남긴다.
+BGM_PRE_DUCK_VOLUME = 0.19
+BGM_FALLBACK_VOLUME = 0.18
+BGM_DUCKED_WEIGHT = 0.86
+BGM_FLOOR_WEIGHT = 0.14
 
 
 def run(cmd: list[str]) -> None:
@@ -233,7 +233,7 @@ def mix_bgm(video_path: str, bgm_path: str | None = None) -> str:
 
     duration = get_duration(video_path)
     mixed = video_path.replace(".mp4", "_bgm.mp4")
-    # 프리덕 ~0.36, 약한 사이드체인, 언덕 BGM을 바닥에 남겨 TTS가 나와도 안 사라지게.
+    # 프리덕 ~0.19, 약한 사이드체인, 언덕 BGM을 바닥에 남겨 TTS가 나와도 안 사라지게.
     filter_complex = (
         "[0:a]aformat=sample_rates="
         f"{AUDIO_RATE}:channel_layouts=stereo,asplit=2[voice][sc];"
