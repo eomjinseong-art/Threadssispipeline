@@ -28,7 +28,7 @@ jobs:
       - name: 사연 재고 자동 보충 (조건부)
         continue-on-error: true
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: python generate_more_stories.py
 
@@ -47,6 +47,6 @@ jobs:
         run: |
           if [ -n "$SLACK_WEBHOOK_URL" ]; then
             curl -s -X POST -H 'Content-type: application/json' \
-              --data "{\"text\":\":rotating_light: 스레드 자동 배포 실패. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+              --data "{\"text\":\":rotating_light: 쓰레드 자동 배포 실패. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
               "$SLACK_WEBHOOK_URL"
           fi
