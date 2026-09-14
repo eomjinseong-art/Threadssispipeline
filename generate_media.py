@@ -43,7 +43,7 @@ from shorts_style import (
 )
 
 VOICE = "ko-KR-SunHiNeural"
-RATE = "+15%"
+RATE = "+28%"
 # edge-tts 7.x 기본값은 SentenceBoundary. 타이핑 자막을 만들려면 반드시 WordBoundary.
 EDGE_TTS_BOUNDARY = "WordBoundary"
 

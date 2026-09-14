@@ -95,7 +95,7 @@ python upload_video.py --video output/final_row43.mp4 --script output/script_row
 - 1080×1920, 25fps, H.264 + AAC 44.1kHz 스테레오, 60초 미만
 - 인트로 ~2.2초: 검은 배경 + 흰 제목. 공백에서 줄바꿈, 한글 1글자 고아 금지
 - 본문: 종이색 RGB(246,246,244). 자막은 위쪽에 2~3줄만 (가운데로 재정렬되며 커지는 벽 없음)
-- `assets/bgm.mp3`: 직접 만든 패드. TTS 아래에도 바닥에 남김
+- `assets/bgm.mp3`: 직접 만든 12초 펜타토닉 플럭+패드 루프. TTS 아래에도 바닥에 남김
 
 ## 시트 컬럼
 

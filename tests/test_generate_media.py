@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from generate_media import (
     EDGE_TTS_BOUNDARY,
     MAX_CAPTION_LINES,
+    RATE,
     SPEAKER_ASS_COLORS,
     build_background,
     build_typing_ass,
@@ -30,6 +31,11 @@ class GenerateMediaHelperTests(unittest.TestCase):
         comm = make_communicate("안녕하세요")
         self.assertEqual(comm.tts_config.boundary, "WordBoundary")
         self.assertNotEqual(comm.tts_config.boundary, "SentenceBoundary")
+
+    def test_tts_rate_is_plus_28(self):
+        self.assertEqual(RATE, "+28%")
+        comm = make_communicate("안녕하세요")
+        self.assertIn("28", comm.tts_config.rate)
 
     def test_seconds_to_ass_time(self):
         self.assertEqual(seconds_to_ass_time(0), "0:00:00.00")

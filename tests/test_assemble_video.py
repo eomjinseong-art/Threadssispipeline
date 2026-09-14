@@ -10,6 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from assemble_video import (
+    BGM_FLOOR_WEIGHT,
+    BGM_PRE_DUCK_VOLUME,
     build_intro_card,
     build_segment,
     concat_segments,
@@ -160,6 +162,17 @@ class AssembleHelperTests(unittest.TestCase):
         self.assertIsNotNone(path)
         self.assertTrue(os.path.isfile(path))
         self.assertGreater(os.path.getsize(path), 1000)
+        dur = get_duration(path)
+        self.assertGreaterEqual(dur, 10.0)
+        self.assertLessEqual(dur, 15.0)
+
+    def test_bgm_mix_is_audible_under_speech(self):
+        self.assertGreaterEqual(BGM_PRE_DUCK_VOLUME, 0.32)
+        self.assertLessEqual(BGM_PRE_DUCK_VOLUME, 0.38)
+        self.assertGreaterEqual(BGM_FLOOR_WEIGHT, 0.28)
+        source = inspect.getsource(mix_bgm)
+        self.assertIn("BGM_PRE_DUCK_VOLUME", source)
+        self.assertIn("BGM_FLOOR_WEIGHT", source)
 
 
 if __name__ == "__main__":

@@ -51,6 +51,12 @@ FFMPEG_AUDIO_ARGS = [
     "-ac", str(AUDIO_CHANNELS),
 ]
 
+# 프리덕 볼륨: 음악으로 들릴 정도. TTS는 위에, 덕 바닥은 남긴다.
+BGM_PRE_DUCK_VOLUME = 0.36
+BGM_FALLBACK_VOLUME = 0.34
+BGM_DUCKED_WEIGHT = 0.68
+BGM_FLOOR_WEIGHT = 0.32
+
 
 def run(cmd: list[str]) -> None:
     """ffmpeg/ffprobe를 UTF-8로 실행한다 (Windows cp949 decode 오류 방지)."""
@@ -227,14 +233,16 @@ def mix_bgm(video_path: str, bgm_path: str | None = None) -> str:
 
     duration = get_duration(video_path)
     mixed = video_path.replace(".mp4", "_bgm.mp4")
-    # 프리덕 ~0.22, 약한 사이드체인, 언덕 BGM을 바닥에 남겨 TTS가 나와도 안 사라지게.
+    # 프리덕 ~0.36, 약한 사이드체인, 언덕 BGM을 바닥에 남겨 TTS가 나와도 안 사라지게.
     filter_complex = (
         "[0:a]aformat=sample_rates="
         f"{AUDIO_RATE}:channel_layouts=stereo,asplit=2[voice][sc];"
         "[1:a]aformat=sample_rates="
-        f"{AUDIO_RATE}:channel_layouts=stereo,volume=0.22,asplit=2[bg][bg_floor];"
-        "[bg][sc]sidechaincompress=threshold=0.10:ratio=2.6:attack=120:release=650:makeup=1:knee=8[ducked];"
-        "[ducked][bg_floor]amix=inputs=2:weights=0.72 0.28:duration=first:normalize=0[bg_out];"
+        f"{AUDIO_RATE}:channel_layouts=stereo,volume={BGM_PRE_DUCK_VOLUME},"
+        "asplit=2[bg][bg_floor];"
+        "[bg][sc]sidechaincompress=threshold=0.12:ratio=2.2:attack=120:release=650:makeup=1:knee=8[ducked];"
+        "[ducked][bg_floor]amix=inputs=2:"
+        f"weights={BGM_DUCKED_WEIGHT} {BGM_FLOOR_WEIGHT}:duration=first:normalize=0[bg_out];"
         "[voice][bg_out]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]"
     )
     try:
@@ -253,7 +261,7 @@ def mix_bgm(video_path: str, bgm_path: str | None = None) -> str:
         print(f"  [경고] sidechain 덕킹 실패, 단순 믹스로 재시도: {exc}")
         simple = (
             "[1:a]aformat=sample_rates="
-            f"{AUDIO_RATE}:channel_layouts=stereo,volume=0.20[bg];"
+            f"{AUDIO_RATE}:channel_layouts=stereo,volume={BGM_FALLBACK_VOLUME}[bg];"
             "[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]"
         )
         run([
