@@ -110,26 +110,104 @@ def get_font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(path, size)
 
 
+def text_pixel_width(draw, text: str, font: ImageFont.FreeTypeFont) -> int:
+    if not text:
+        return 0
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0]
+
+
 def wrap_korean(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
-    """공백이 적은 한국어 제목을 픽셀 폭 기준으로 줄바꿈."""
+    """한국어 제목/본문 줄바꿈.
+
+    공백(어절)에서 먼저 끊고, 한 토큰이 너무 길 때만 음절 단위로 자른다.
+    2글자 단어(예: 간섭)를 `간` / `섭` 으로 쪼개 마지막 한글자를 고아로 남기지 않는다.
+    """
     from PIL import Image, ImageDraw
 
-    probe = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT))
+    probe = Image.new("RGB", (max(int(max_width), 1), 64), (0, 0, 0))
     draw = ImageDraw.Draw(probe)
     lines: list[str] = []
     for paragraph in str(text).split("\n"):
-        if not paragraph:
+        if paragraph == "":
             lines.append("")
             continue
-        current = ""
-        for ch in paragraph:
-            trial = current + ch
-            bbox = draw.textbbox((0, 0), trial, font=font)
-            if bbox[2] - bbox[0] <= max_width or not current:
-                current = trial
-            else:
-                lines.append(current)
-                current = ch
+        lines.extend(_wrap_paragraph(paragraph, draw, font, max_width))
+    return lines or [str(text)]
+
+
+def _wrap_paragraph(paragraph: str, draw, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    if text_pixel_width(draw, paragraph, font) <= max_width:
+        return [paragraph]
+
+    words = [w for w in paragraph.split(" ") if w != ""]
+    if not words:
+        return [paragraph]
+
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if text_pixel_width(draw, candidate, font) <= max_width:
+            current = candidate
+            continue
         if current:
             lines.append(current)
-    return lines or [str(text)]
+            current = ""
+        if text_pixel_width(draw, word, font) <= max_width:
+            current = word
+            continue
+        broken = _wrap_long_word(word, draw, font, max_width)
+        lines.extend(broken[:-1])
+        current = broken[-1]
+    if current:
+        lines.append(current)
+    return _fix_orphan_syllables(lines, draw, font, max_width)
+
+
+def _wrap_long_word(word: str, draw, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    i = 0
+    while i < len(word):
+        ch = word[i]
+        trial = current + ch
+        if current and text_pixel_width(draw, trial, font) > max_width:
+            rest = word[i:]
+            if len(rest) == 1 and len(current) >= 2:
+                lines.append(current[:-1])
+                current = current[-1] + rest
+                break
+            if len(current) == 1 and len(rest) == 1:
+                current = current + rest
+                break
+            lines.append(current)
+            current = ch
+        else:
+            current = trial
+        i += 1
+    if current:
+        lines.append(current)
+    return lines or [word]
+
+
+def _fix_orphan_syllables(
+    lines: list[str], draw, font: ImageFont.FreeTypeFont, max_width: int
+) -> list[str]:
+    """마지막 줄이 한글자이면 앞 줄 끝 글자를 내려 2글자 단어를 유지한다."""
+    if len(lines) < 2:
+        return lines
+    last = lines[-1]
+    prev = lines[-2]
+    if len(last) != 1 or not prev:
+        return lines
+    moved = prev[-1] + last
+    new_prev = prev[:-1].rstrip()
+    if new_prev and text_pixel_width(draw, moved, font) <= max_width:
+        lines[-2] = new_prev
+        lines[-1] = moved
+        return lines
+    merged = prev + last
+    if text_pixel_width(draw, merged, font) <= max_width:
+        return lines[:-2] + [merged]
+    return lines

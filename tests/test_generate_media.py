@@ -7,13 +7,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from generate_media import (
     EDGE_TTS_BOUNDARY,
+    MAX_CAPTION_LINES,
+    RATE,
     SPEAKER_ASS_COLORS,
     build_background,
     build_typing_ass,
+    caption_body_lines,
+    closes_sentence,
     color_for_position,
     find_speaker_segments,
+    format_caption_ass,
     make_communicate,
+    max_simultaneous_caption_lines,
     seconds_to_ass_time,
+    wrap_caption_lines,
 )
 from shorts_style import BG_COLOR
 
@@ -24,6 +31,11 @@ class GenerateMediaHelperTests(unittest.TestCase):
         comm = make_communicate("안녕하세요")
         self.assertEqual(comm.tts_config.boundary, "WordBoundary")
         self.assertNotEqual(comm.tts_config.boundary, "SentenceBoundary")
+
+    def test_tts_rate_is_plus_28(self):
+        self.assertEqual(RATE, "+28%")
+        comm = make_communicate("안녕하세요")
+        self.assertIn("28", comm.tts_config.rate)
 
     def test_seconds_to_ass_time(self):
         self.assertEqual(seconds_to_ass_time(0), "0:00:00.00")
@@ -62,6 +74,100 @@ class GenerateMediaHelperTests(unittest.TestCase):
                 spoken = line.split(",", 9)[-1].strip()
                 self.assertTrue(spoken, "ASS Dialogue 텍스트가 비면 자막이 안 나옵니다")
             self.assertIn("안녕하세요", text)
+
+    def test_caption_window_is_at_most_three_lines(self):
+        long = " ".join(f"단어{i}" for i in range(40))
+        lines = wrap_caption_lines(long)
+        self.assertLessEqual(len(lines), MAX_CAPTION_LINES)
+        self.assertGreaterEqual(len(lines), 1)
+
+    def test_reactions_reset_so_speakers_do_not_share_one_wall(self):
+        narration = (
+            "현실언니는 이렇게 말합니다. 선 그으세요. "
+            "공감언니는 이렇게 말합니다. 힘들었죠. "
+            "그리고 폭주언니는 이렇게 말합니다. 나가세요."
+        )
+        words = narration.split()
+        boundaries = [
+            {"text": w, "offset": i * 0.2, "duration": 0.2} for i, w in enumerate(words)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            ass_path = Path(tmp) / "re.ass"
+            build_typing_ass(boundaries, 20.0, narration, "reactions", str(ass_path))
+            text = ass_path.read_text(encoding="utf-8")
+            dialogues = [ln.split(",", 9)[-1] for ln in text.splitlines() if ln.startswith("Dialogue:")]
+            self.assertTrue(dialogues)
+            # 한 이벤트에 세 화자 색이 동시에 있으면 벽이 된 것
+            for spoken in dialogues:
+                color_hits = sum(1 for token in SPEAKER_ASS_COLORS.values() if token in spoken)
+                self.assertLessEqual(color_hits, 1, spoken)
+            self.assertIn("\\an8", text)
+
+    def test_format_caption_uses_n_breaks_not_one_blob(self):
+        parts = [(f"단어{i}", None) for i in range(12)]
+        formatted = format_caption_ass(parts)
+        self.assertIn(r"\N", formatted)
+        self.assertLessEqual(formatted.count(r"\N"), MAX_CAPTION_LINES - 1)
+
+    def test_closes_sentence_uses_narration_period_not_tts_token(self):
+        narration = "안녕하세요, 오늘도 사연 하나 들고 왔습니다. 결혼하고 친정엄마가"
+        start = narration.find("왔습니다")
+        self.assertTrue(closes_sentence("왔습니다", narration, start))
+        hello_at = narration.find("안녕하세요")
+        self.assertFalse(closes_sentence("안녕하세요", narration, hello_at))
+        mid_at = narration.find("결혼하고")
+        self.assertFalse(closes_sentence("결혼하고", narration, mid_at))
+
+    def test_story_ass_resets_on_sentences_and_never_exceeds_window(self):
+        import json
+        import re
+
+        fixture = json.loads(
+            (Path(__file__).resolve().parent / "fixtures" / "script_ep102.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        narration = fixture["slides"][0]["narration_text"]
+        # edge-tts WordBoundary 처럼 한글/영숫자만 토큰. 마침표는 빠진다.
+        words = re.findall(r"[가-힣A-Za-z0-9]+", narration)
+        self.assertIn("왔습니다", words)
+        self.assertNotIn("왔습니다.", words)
+        boundaries = [
+            {"text": w, "offset": i * 0.2, "duration": 0.2} for i, w in enumerate(words)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            ass_path = Path(tmp) / "story.ass"
+            build_typing_ass(
+                boundaries, len(words) * 0.2 + 0.2, narration, "story", str(ass_path)
+            )
+            text = ass_path.read_text(encoding="utf-8")
+            dialogues = [
+                ln.split(",", 9)[-1] for ln in text.splitlines() if ln.startswith("Dialogue:")
+            ]
+            self.assertTrue(dialogues)
+
+            for spoken in dialogues:
+                body_lines = caption_body_lines(spoken)
+                self.assertLessEqual(
+                    len(body_lines),
+                    MAX_CAPTION_LINES,
+                    spoken,
+                )
+            self.assertLessEqual(
+                max_simultaneous_caption_lines(text),
+                MAX_CAPTION_LINES,
+            )
+
+            bodies = ["".join(caption_body_lines(s)) for s in dialogues]
+            # 첫 문장이 끝난 뒤에는 인사와 본문이 한 창에 안 섞인다.
+            mixed = [
+                b for b in bodies
+                if "안녕하세요" in b and "결혼하고" in b
+            ]
+            self.assertEqual(mixed, [], mixed)
+            self.assertTrue(any("안녕하세요" in b and "왔습니다" in b for b in bodies))
+            self.assertTrue(any("결혼하고" in b and "안녕하세요" not in b for b in bodies))
+            self.assertTrue(any("지쳤습니다" in b and "안녕하세요" not in b for b in bodies))
 
     def test_background_is_paper_color(self):
         from PIL import Image

@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import textwrap
 
 import requests
 from google.auth.transport.requests import Request
@@ -40,7 +39,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from PIL import Image, ImageDraw
 
-from shorts_style import get_font, thumbnail_path_for_row
+from shorts_style import get_font, thumbnail_path_for_row, wrap_korean
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
@@ -280,7 +279,7 @@ def build_thumbnail(title: str, out_path: str) -> None:
     img = Image.new("RGB", THUMBNAIL_SIZE, color=(10, 10, 10))
     draw = ImageDraw.Draw(img)
     font = get_font(72)
-    wrapped_lines = textwrap.wrap(title.replace(" #Shorts", ""), width=18)
+    wrapped_lines = wrap_korean(title.replace(" #Shorts", ""), font, THUMBNAIL_SIZE[0] - 80)
 
     line_heights = []
     for line in wrapped_lines:

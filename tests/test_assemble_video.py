@@ -10,6 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from assemble_video import (
+    BGM_FLOOR_WEIGHT,
+    BGM_PRE_DUCK_VOLUME,
     build_intro_card,
     build_segment,
     concat_segments,
@@ -118,7 +120,8 @@ class AssembleHelperTests(unittest.TestCase):
             _extract_frame(str(seg), 0.8, str(frame))
             img = Image.open(frame).convert("RGB")
             w, h = img.size
-            box = img.crop((w // 4, h // 2 - 120, w * 3 // 4, h // 2 + 120))
+            # Alignment 8 + MarginV 520: 자막은 화면 위쪽 고정 (가운데 재정렬 안 함)
+            box = img.crop((w // 8, 480, w * 7 // 8, 820))
             dark = sum(1 for r, g, b in box.getdata() if (r + g + b) / 3 < 90)
             self.assertGreater(dark, 80, "자막이 타지 않은 것 같습니다")
 
@@ -159,6 +162,18 @@ class AssembleHelperTests(unittest.TestCase):
         self.assertIsNotNone(path)
         self.assertTrue(os.path.isfile(path))
         self.assertGreater(os.path.getsize(path), 1000)
+        dur = get_duration(path)
+        self.assertGreaterEqual(dur, 10.0)
+        self.assertLessEqual(dur, 15.0)
+
+    def test_bgm_mix_is_audible_under_speech(self):
+        self.assertGreaterEqual(BGM_PRE_DUCK_VOLUME, 0.18)
+        self.assertLessEqual(BGM_PRE_DUCK_VOLUME, 0.20)
+        self.assertGreaterEqual(BGM_FLOOR_WEIGHT, 0.12)
+        self.assertLessEqual(BGM_FLOOR_WEIGHT, 0.15)
+        source = inspect.getsource(mix_bgm)
+        self.assertIn("BGM_PRE_DUCK_VOLUME", source)
+        self.assertIn("BGM_FLOOR_WEIGHT", source)
 
 
 if __name__ == "__main__":

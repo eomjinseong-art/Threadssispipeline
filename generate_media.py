@@ -21,6 +21,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import subprocess
 
 import edge_tts
@@ -42,7 +43,7 @@ from shorts_style import (
 )
 
 VOICE = "ko-KR-SunHiNeural"
-RATE = "+15%"
+RATE = "+28%"
 # edge-tts 7.x 기본값은 SentenceBoundary. 타이핑 자막을 만들려면 반드시 WordBoundary.
 EDGE_TTS_BOUNDARY = "WordBoundary"
 
@@ -54,7 +55,14 @@ SPEAKER_ASS_COLORS = {
     "폭주언니": "&H004A4BE2",
 }
 
-MAX_ACCUMULATED_CHARS = 90
+# 화면에는 2~3줄 가라오케 창만 둔다. 슬라이드 전체를 한 덩어리로 쌓지 않는다.
+MAX_CAPTION_LINES = 3
+MAX_CHARS_PER_LINE = 15
+SENTENCE_END_CHARS = set(".?!。…！？")
+# edge-tts WordBoundary 는 "왔습니다." 의 마침표를 토큰에서 빼는 경우가 많다.
+TRAILING_SKIP_CHARS = " \t\"'”’)]》>"
+PUNCT_ONLY_RE = re.compile(r"^[\s.?!。…！？,，、~…·]+$")
+ASS_OVERRIDE_RE = re.compile(r"\{[^}]*\}")
 
 
 def make_communicate(text: str) -> edge_tts.Communicate:
@@ -123,6 +131,141 @@ def ass_font_name() -> str:
     return family
 
 
+def ends_sentence(word: str) -> bool:
+    w = (word or "").strip()
+    return bool(w) and w[-1] in SENTENCE_END_CHARS
+
+
+def is_punct_only(word: str) -> bool:
+    w = (word or "").strip()
+    return bool(w) and bool(PUNCT_ONLY_RE.match(w))
+
+
+def closes_sentence(word: str, narration: str, word_start: int) -> bool:
+    """문장 끝이면 True. TTS 토큰에 마침표가 없어도 원문 구두점을 본다.
+
+    사연 슬라이드는 화자 색 전환이 없어서, 구두점을 못 보면 창이 슬라이드
+    끝까지 밀리며 8줄짜리 벽이 된다. 쉼표(안녕하세요,)는 문장이 아니다.
+    """
+    if ends_sentence(word):
+        return True
+    start = max(0, word_start)
+    end = start + len(word or "")
+    after = narration[end:] if narration else ""
+    i = 0
+    while i < len(after) and after[i] in TRAILING_SKIP_CHARS:
+        i += 1
+    return i < len(after) and after[i] in SENTENCE_END_CHARS
+
+
+def parse_ass_time(value: str) -> float:
+    parts = value.strip().split(":")
+    if len(parts) != 3:
+        raise ValueError(f"ASS 시각이 아닙니다: {value}")
+    h, m, s = int(parts[0]), int(parts[1]), float(parts[2])
+    return h * 3600 + m * 60 + s
+
+
+def caption_body_lines(dialogue_text: str) -> list[str]:
+    body = ASS_OVERRIDE_RE.sub("", dialogue_text or "")
+    if not body.strip():
+        return []
+    return body.split(r"\N")
+
+
+def parse_ass_dialogues(ass_text: str) -> list[tuple[float, float, str]]:
+    events: list[tuple[float, float, str]] = []
+    for line in ass_text.splitlines():
+        if not line.startswith("Dialogue:"):
+            continue
+        payload = line.split(":", 1)[1].strip()
+        parts = payload.split(",", 9)
+        if len(parts) < 10:
+            continue
+        events.append((parse_ass_time(parts[1]), parse_ass_time(parts[2]), parts[9]))
+    return events
+
+
+def max_simultaneous_caption_lines(ass_text: str) -> int:
+    """같은 시각에 겹쳐 보이는 Dialogue 줄 수 (창 줄 + 겹침 합)."""
+    events = parse_ass_dialogues(ass_text)
+    if not events:
+        return 0
+    max_lines = max((len(caption_body_lines(text)) for _s, _e, text in events), default=0)
+    points = sorted({t for start, end, _text in events for t in (start, end)})
+    for i in range(len(points) - 1):
+        mid = (points[i] + points[i + 1]) / 2.0
+        visible = 0
+        for start, end, text in events:
+            if start <= mid < end:
+                visible += len(caption_body_lines(text))
+        max_lines = max(max_lines, visible)
+    return max_lines
+
+
+def split_word_no_orphan(word: str, max_chars: int) -> list[str]:
+    if len(word) <= max_chars:
+        return [word]
+    chunks: list[str] = []
+    i = 0
+    while i < len(word):
+        remaining = len(word) - i
+        if remaining <= max_chars:
+            tail = word[i:]
+            if len(tail) == 1 and chunks and chunks[-1]:
+                prev = chunks[-1]
+                chunks[-1] = prev[:-1]
+                tail = prev[-1] + tail
+                if not chunks[-1]:
+                    chunks.pop()
+            chunks.append(tail)
+            break
+        take = max_chars
+        if remaining - take == 1 and take >= 2:
+            take -= 1
+        chunks.append(word[i:i + take])
+        i += take
+    return [c for c in chunks if c]
+
+
+def wrap_caption_lines(text: str, max_chars: int = MAX_CHARS_PER_LINE, max_lines: int = MAX_CAPTION_LINES) -> list[str]:
+    """어절 우선 줄바꿈 후 마지막 max_lines 줄만 남긴다."""
+    words = [w for w in text.split(" ") if w]
+    if not words:
+        return []
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        if len(word) <= max_chars:
+            current = word
+        else:
+            pieces = split_word_no_orphan(word, max_chars)
+            lines.extend(pieces[:-1])
+            current = pieces[-1]
+    if current:
+        lines.append(current)
+    return lines[-max_lines:]
+
+
+def format_caption_ass(parts: list[tuple[str, str | None]]) -> str:
+    """가라오케 창: 최대 2~3줄. 화자가 바뀌면 창을 비우므로 색은 보통 하나."""
+    plain = " ".join(w.replace("{", "").replace("}", "") for w, _c in parts).strip()
+    wrapped = wrap_caption_lines(plain)
+    if not wrapped:
+        return ""
+    body = r"\N".join(wrapped)
+    colors = {c for _w, c in parts if c}
+    if len(colors) == 1:
+        return f"{{\\c{next(iter(colors))}&}}{body}"
+    return body
+
+
 def build_typing_ass(
     word_boundaries: list[dict],
     total_duration: float,
@@ -130,17 +273,21 @@ def build_typing_ass(
     slide_type: str,
     out_path: str,
 ) -> None:
-    """단어가 하나씩 늘어나는 타이핑 효과 자막(.ass) 파일 생성."""
+    """말하는 단어만 2~3줄 창에 쌓고, 문장/화자가 바뀌면 지운다.
+
+    Alignment 8(상단 고정)이라 글자가 늘어도 화면 가운데로 다시 모이지 않는다.
+    """
     font_name = ass_font_name()
+    # Alignment 8 = 위 가운데. MarginV 는 라벨(사연) 아래.
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {VIDEO_WIDTH}
 PlayResY: {VIDEO_HEIGHT}
-WrapStyle: 0
+WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},54,{TEXT_COLOR_ASS},&H000000FF,&H00FAFAFA,&H00FAFAFA,-1,0,0,0,100,100,0,0,1,0,0,5,{SAFE_LEFT},{VIDEO_WIDTH - SAFE_RIGHT},0,1
+Style: Default,{font_name},54,{TEXT_COLOR_ASS},&H000000FF,&H00FAFAFA,&H00FAFAFA,-1,0,0,0,100,100,0,0,1,0,0,8,{SAFE_LEFT},{VIDEO_WIDTH - SAFE_RIGHT},520,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -151,6 +298,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     accumulated_parts: list[tuple[str, str | None]] = []
     cursor = 0
+    prev_color: str | None = None
+    clear_before_next = False
 
     for i, wb in enumerate(word_boundaries):
         word = wb["text"]
@@ -159,30 +308,42 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         cursor = pos + len(word)
 
         color = color_for_position(pos, segments) if segments else None
-        accumulated_parts.append((word, color))
+        sentence_done = closes_sentence(word, narration_text, pos)
 
-        while sum(len(w) + 1 for w, _ in accumulated_parts) > MAX_ACCUMULATED_CHARS and len(accumulated_parts) > 1:
-            accumulated_parts.pop(0)
+        if is_punct_only(word):
+            if sentence_done:
+                clear_before_next = True
+            continue
+
+        if clear_before_next:
+            accumulated_parts = []
+            clear_before_next = False
+        if (
+            slide_type == "reactions"
+            and accumulated_parts
+            and color is not None
+            and prev_color is not None
+            and color != prev_color
+        ):
+            accumulated_parts = []
+
+        accumulated_parts.append((word, color))
+        prev_color = color if color is not None else prev_color
 
         start = wb["offset"]
         end = word_boundaries[i + 1]["offset"] if i + 1 < len(word_boundaries) else total_duration
 
-        text_pieces: list[str] = []
-        last_color = None
-        for w, c in accumulated_parts:
-            if c != last_color:
-                text_pieces.append(f"{{\\c{c if c else TEXT_COLOR_ASS}&}}")
-                last_color = c
-            safe_w = w.replace("{", "").replace("}", "")
-            text_pieces.append(safe_w + " ")
-        full_text = "".join(text_pieces).strip()
+        full_text = format_caption_ass(accumulated_parts)
         if not full_text:
             continue
 
         lines.append(
             f"Dialogue: 0,{seconds_to_ass_time(start)},{seconds_to_ass_time(end)},"
-            f"Default,,0,0,0,,{full_text}\n"
+            f"Default,,0,0,0,,{{\\an8}}{full_text}\n"
         )
+
+        if sentence_done:
+            clear_before_next = True
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
