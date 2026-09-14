@@ -21,6 +21,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import subprocess
 
 import edge_tts
@@ -57,7 +58,11 @@ SPEAKER_ASS_COLORS = {
 # 화면에는 2~3줄 가라오케 창만 둔다. 슬라이드 전체를 한 덩어리로 쌓지 않는다.
 MAX_CAPTION_LINES = 3
 MAX_CHARS_PER_LINE = 15
-SENTENCE_END_CHARS = set(".?!。…")
+SENTENCE_END_CHARS = set(".?!。…！？")
+# edge-tts WordBoundary 는 "왔습니다." 의 마침표를 토큰에서 빼는 경우가 많다.
+TRAILING_SKIP_CHARS = " \t\"'”’)]》>"
+PUNCT_ONLY_RE = re.compile(r"^[\s.?!。…！？,，、~…·]+$")
+ASS_OVERRIDE_RE = re.compile(r"\{[^}]*\}")
 
 
 def make_communicate(text: str) -> edge_tts.Communicate:
@@ -131,6 +136,73 @@ def ends_sentence(word: str) -> bool:
     return bool(w) and w[-1] in SENTENCE_END_CHARS
 
 
+def is_punct_only(word: str) -> bool:
+    w = (word or "").strip()
+    return bool(w) and bool(PUNCT_ONLY_RE.match(w))
+
+
+def closes_sentence(word: str, narration: str, word_start: int) -> bool:
+    """문장 끝이면 True. TTS 토큰에 마침표가 없어도 원문 구두점을 본다.
+
+    사연 슬라이드는 화자 색 전환이 없어서, 구두점을 못 보면 창이 슬라이드
+    끝까지 밀리며 8줄짜리 벽이 된다. 쉼표(안녕하세요,)는 문장이 아니다.
+    """
+    if ends_sentence(word):
+        return True
+    start = max(0, word_start)
+    end = start + len(word or "")
+    after = narration[end:] if narration else ""
+    i = 0
+    while i < len(after) and after[i] in TRAILING_SKIP_CHARS:
+        i += 1
+    return i < len(after) and after[i] in SENTENCE_END_CHARS
+
+
+def parse_ass_time(value: str) -> float:
+    parts = value.strip().split(":")
+    if len(parts) != 3:
+        raise ValueError(f"ASS 시각이 아닙니다: {value}")
+    h, m, s = int(parts[0]), int(parts[1]), float(parts[2])
+    return h * 3600 + m * 60 + s
+
+
+def caption_body_lines(dialogue_text: str) -> list[str]:
+    body = ASS_OVERRIDE_RE.sub("", dialogue_text or "")
+    if not body.strip():
+        return []
+    return body.split(r"\N")
+
+
+def parse_ass_dialogues(ass_text: str) -> list[tuple[float, float, str]]:
+    events: list[tuple[float, float, str]] = []
+    for line in ass_text.splitlines():
+        if not line.startswith("Dialogue:"):
+            continue
+        payload = line.split(":", 1)[1].strip()
+        parts = payload.split(",", 9)
+        if len(parts) < 10:
+            continue
+        events.append((parse_ass_time(parts[1]), parse_ass_time(parts[2]), parts[9]))
+    return events
+
+
+def max_simultaneous_caption_lines(ass_text: str) -> int:
+    """같은 시각에 겹쳐 보이는 Dialogue 줄 수 (창 줄 + 겹침 합)."""
+    events = parse_ass_dialogues(ass_text)
+    if not events:
+        return 0
+    max_lines = max((len(caption_body_lines(text)) for _s, _e, text in events), default=0)
+    points = sorted({t for start, end, _text in events for t in (start, end)})
+    for i in range(len(points) - 1):
+        mid = (points[i] + points[i + 1]) / 2.0
+        visible = 0
+        for start, end, text in events:
+            if start <= mid < end:
+                visible += len(caption_body_lines(text))
+        max_lines = max(max_lines, visible)
+    return max_lines
+
+
 def split_word_no_orphan(word: str, max_chars: int) -> list[str]:
     if len(word) <= max_chars:
         return [word]
@@ -178,12 +250,6 @@ def wrap_caption_lines(text: str, max_chars: int = MAX_CHARS_PER_LINE, max_lines
             current = pieces[-1]
     if current:
         lines.append(current)
-    if len(lines) >= 2 and len(lines[-1]) == 1 and lines[-2]:
-        prev = lines[-2]
-        lines[-2] = prev[:-1].rstrip()
-        lines[-1] = prev[-1] + lines[-1]
-        if not lines[-2]:
-            lines.pop(-2)
     return lines[-max_lines:]
 
 
@@ -242,6 +308,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         cursor = pos + len(word)
 
         color = color_for_position(pos, segments) if segments else None
+        sentence_done = closes_sentence(word, narration_text, pos)
+
+        if is_punct_only(word):
+            if sentence_done:
+                clear_before_next = True
+            continue
+
         if clear_before_next:
             accumulated_parts = []
             clear_before_next = False
@@ -269,7 +342,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"Default,,0,0,0,,{{\\an8}}{full_text}\n"
         )
 
-        if ends_sentence(word):
+        if sentence_done:
             clear_before_next = True
 
     with open(out_path, "w", encoding="utf-8") as f:

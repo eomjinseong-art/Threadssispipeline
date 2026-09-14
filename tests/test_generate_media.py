@@ -11,10 +11,13 @@ from generate_media import (
     SPEAKER_ASS_COLORS,
     build_background,
     build_typing_ass,
+    caption_body_lines,
+    closes_sentence,
     color_for_position,
     find_speaker_segments,
     format_caption_ass,
     make_communicate,
+    max_simultaneous_caption_lines,
     seconds_to_ass_time,
     wrap_caption_lines,
 )
@@ -99,6 +102,66 @@ class GenerateMediaHelperTests(unittest.TestCase):
         formatted = format_caption_ass(parts)
         self.assertIn(r"\N", formatted)
         self.assertLessEqual(formatted.count(r"\N"), MAX_CAPTION_LINES - 1)
+
+    def test_closes_sentence_uses_narration_period_not_tts_token(self):
+        narration = "안녕하세요, 오늘도 사연 하나 들고 왔습니다. 결혼하고 친정엄마가"
+        start = narration.find("왔습니다")
+        self.assertTrue(closes_sentence("왔습니다", narration, start))
+        hello_at = narration.find("안녕하세요")
+        self.assertFalse(closes_sentence("안녕하세요", narration, hello_at))
+        mid_at = narration.find("결혼하고")
+        self.assertFalse(closes_sentence("결혼하고", narration, mid_at))
+
+    def test_story_ass_resets_on_sentences_and_never_exceeds_window(self):
+        import json
+        import re
+
+        fixture = json.loads(
+            (Path(__file__).resolve().parent / "fixtures" / "script_ep102.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        narration = fixture["slides"][0]["narration_text"]
+        # edge-tts WordBoundary 처럼 한글/영숫자만 토큰. 마침표는 빠진다.
+        words = re.findall(r"[가-힣A-Za-z0-9]+", narration)
+        self.assertIn("왔습니다", words)
+        self.assertNotIn("왔습니다.", words)
+        boundaries = [
+            {"text": w, "offset": i * 0.2, "duration": 0.2} for i, w in enumerate(words)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            ass_path = Path(tmp) / "story.ass"
+            build_typing_ass(
+                boundaries, len(words) * 0.2 + 0.2, narration, "story", str(ass_path)
+            )
+            text = ass_path.read_text(encoding="utf-8")
+            dialogues = [
+                ln.split(",", 9)[-1] for ln in text.splitlines() if ln.startswith("Dialogue:")
+            ]
+            self.assertTrue(dialogues)
+
+            for spoken in dialogues:
+                body_lines = caption_body_lines(spoken)
+                self.assertLessEqual(
+                    len(body_lines),
+                    MAX_CAPTION_LINES,
+                    spoken,
+                )
+            self.assertLessEqual(
+                max_simultaneous_caption_lines(text),
+                MAX_CAPTION_LINES,
+            )
+
+            bodies = ["".join(caption_body_lines(s)) for s in dialogues]
+            # 첫 문장이 끝난 뒤에는 인사와 본문이 한 창에 안 섞인다.
+            mixed = [
+                b for b in bodies
+                if "안녕하세요" in b and "결혼하고" in b
+            ]
+            self.assertEqual(mixed, [], mixed)
+            self.assertTrue(any("안녕하세요" in b and "왔습니다" in b for b in bodies))
+            self.assertTrue(any("결혼하고" in b and "안녕하세요" not in b for b in bodies))
+            self.assertTrue(any("지쳤습니다" in b and "안녕하세요" not in b for b in bodies))
 
     def test_background_is_paper_color(self):
         from PIL import Image
