@@ -2,3 +2,7 @@ openai
 gspread
 google-auth
 requests
+edge-tts>=7.0.0
+Pillow
+google-api-python-client
+google-auth-oauthlib

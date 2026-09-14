@@ -1,9 +1,8 @@
 name: daily-threads-pipeline
 
+# 시트 Status=대기 행을 Shorts 파이프라인과 동시에 가져가지 않도록
+# 스케줄 배포는 끄고 수동(workflow_dispatch)만 남긴다.
 on:
-  schedule:
-    # UTC 0,9,12시 = 한국시간(KST) 오전 9시 / 오후 6시 / 오후 9시
-    - cron: "0 0,9,12 * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -47,6 +46,6 @@ jobs:
         run: |
           if [ -n "$SLACK_WEBHOOK_URL" ]; then
             curl -s -X POST -H 'Content-type: application/json' \
-              --data "{\"text\":\":rotating_light: 쓰레드 자동 배포 실패. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+              --data "{\"text\":\":rotating_light: 쓰레드 수동 배포 실패. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
               "$SLACK_WEBHOOK_URL"
           fi
