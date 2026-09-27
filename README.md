@@ -44,9 +44,25 @@ GitHub Actions `daily-shorts-pipeline` (`.github/workflows/daily_shorts.yml`):
 6. 성공 시에만 `YouTube=완료`
 7. mp4 artifact 보관
 
-## Threads는 수동만
+## Threads 자동 배포
 
-`daily_threads.yml` 은 `workflow_dispatch`만. `Status=대기` 행을 가져가므로 Shorts 큐와 겹치지 않습니다. Shorts 워크플로는 Threads 토큰을 쓰지 않습니다.
+`daily-threads-pipeline` (`.github/workflows/daily_threads.yml`)는 Shorts보다 30분 늦게 `Status=대기` 행 하나를 Threads에 올립니다. 게시가 성공한 뒤에만 `Status=완료`로 바꿉니다. Shorts는 `YouTube` 열만 읽고 쓰며 `Status`는 바꾸지 않으므로 두 큐가 겹치지 않습니다. Shorts 워크플로는 Threads 토큰을 쓰지 않습니다.
+
+| 한국시간(KST) | UTC |
+| --- | --- |
+| 오전 9시 30분 | 00:30 |
+| 오후 6시 30분 | 09:30 |
+| 오후 9시 30분 | 12:30 |
+
+cron: `30 0,9,12 * * *`. 같은 그룹의 실행이 겹치면 `threads-publish`에서 기다립니다 (`cancel-in-progress: false`). 수동 실행: Actions → **daily-threads-pipeline** → Run workflow. 실패 Slack 문구는 스케줄 실행이면 `자동`, `workflow_dispatch`이면 `수동`입니다.
+
+장기 액세스 토큰은 약 60일입니다. `refresh-threads-token` (`.github/workflows/refresh_threads_token.yml`)이 매주 월요일 03:17 UTC (`17 3 * * 1`, 한국시간 12:17)에 갱신합니다. 수동 실행도 됩니다.
+
+```
+GET https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token&access_token=...
+```
+
+새 토큰은 로그에 남기지 않고 `THREADS_ACCESS_TOKEN` 시크릿에 다시 씁니다. 이 저장에는 **이 저장소의 Secrets 읽기/쓰기 권한이 있는 fine-grained PAT**가 필요하며, 그 PAT를 Actions 시크릿 `SECRETS_WRITE_TOKEN`으로 넣어야 합니다. 시크릿이 없으면 워크플로는 갱신 API 결과를 확인한 뒤 경고만 출력하고 토큰은 저장하지 않습니다. 작업이 실패로 끝나는 것은 갱신 API 호출 자체가 실패할 때뿐입니다.
 
 ## 필요한 GitHub Actions 시크릿
 
@@ -59,6 +75,9 @@ GitHub Actions `daily-shorts-pipeline` (`.github/workflows/daily_shorts.yml`):
 | `EXPECTED_YOUTUBE_CHANNEL_ID` | 권장 | `UCbMITZoZxPQrmKsZdbwUB7g` (waitmybabe). 다르면 업로드 중단 |
 | `OPENAI_API_KEY` | 선택 | 사연 재고 보충 |
 | `SLACK_WEBHOOK_URL` | 선택 | 실패 알림 |
+| `THREADS_ACCESS_TOKEN` | Threads 필수 | long-lived 토큰. 주간 갱신 워크플로가 교체 |
+| `THREADS_USER_ID` | Threads 필수 | Threads 사용자 ID |
+| `SECRETS_WRITE_TOKEN` | 토큰 갱신에 필요 | 이 저장소 Secrets 읽기/쓰기 권한이 있는 fine-grained PAT |
 
 과거 다른 브랜드 계정(그날의남녀, Feedscanai)에 올라간 사고가 있어 채널 ID 검증을 켭니다.
 
