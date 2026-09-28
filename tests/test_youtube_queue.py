@@ -71,6 +71,36 @@ class YouTubeQueueTests(unittest.TestCase):
         self.assertIsNone(idx)
         self.assertIsNone(row)
 
+    def test_skips_later_duplicate_titles(self):
+        records = [
+            _row("80", youtube="완료", title="친정엄마의 과도한 간섭"),
+            _row("90", youtube="대기", title="친정엄마의 과도한 간섭"),
+            _row("91", youtube="대기", title="다른 제목"),
+        ]
+        idx, row = pick_youtube_pending_row(records)
+        self.assertEqual(row["제목"], "다른 제목")
+        self.assertEqual(idx, 4)
+
+    def test_catalog_story_is_picked_before_lower_ep(self):
+        from topic_catalog import load_w_topics
+
+        w_title = load_w_topics()[0]["title"]
+        records = [
+            _row("70", youtube="대기", title="반지 대신 청구서"),
+            _row("210", youtube="대기", title=w_title),
+        ]
+        _idx, row = pick_youtube_pending_row(records)
+        self.assertEqual(row["제목"], w_title)
+
+    def test_duplicate_ep_prefix_does_not_count_as_new_title(self):
+        records = [
+            _row("80", youtube="완료", title="EP.80 친정엄마의 과도한 간섭"),
+            _row("120", youtube="대기", title="친정엄마의 과도한 간섭"),
+            _row("121", youtube="대기", title="새 갈등"),
+        ]
+        _idx, row = pick_youtube_pending_row(records)
+        self.assertEqual(row["제목"], "새 갈등")
+
 
 if __name__ == "__main__":
     unittest.main()

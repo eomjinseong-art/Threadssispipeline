@@ -22,7 +22,15 @@ from generate_media import (
     seconds_to_ass_time,
     wrap_caption_lines,
 )
-from shorts_style import BG_COLOR
+from shorts_style import (
+    BG_COLOR,
+    CAPTION_FONT_SIZE,
+    CAPTION_MARGIN_V,
+    SAFE_BOTTOM,
+    SAFE_RIGHT,
+    SAFE_TOP,
+    VIDEO_WIDTH,
+)
 
 
 class GenerateMediaHelperTests(unittest.TestCase):
@@ -32,10 +40,11 @@ class GenerateMediaHelperTests(unittest.TestCase):
         self.assertEqual(comm.tts_config.boundary, "WordBoundary")
         self.assertNotEqual(comm.tts_config.boundary, "SentenceBoundary")
 
-    def test_tts_rate_is_plus_28(self):
-        self.assertEqual(RATE, "+28%")
+    def test_tts_rate_is_story_pace(self):
+        self.assertEqual(RATE, "+12%")
         comm = make_communicate("안녕하세요")
-        self.assertIn("28", comm.tts_config.rate)
+        self.assertIn("12", comm.tts_config.rate)
+        self.assertNotIn("28", comm.tts_config.rate)
 
     def test_seconds_to_ass_time(self):
         self.assertEqual(seconds_to_ass_time(0), "0:00:00.00")
@@ -168,6 +177,12 @@ class GenerateMediaHelperTests(unittest.TestCase):
             self.assertTrue(any("안녕하세요" in b and "왔습니다" in b for b in bodies))
             self.assertTrue(any("결혼하고" in b and "안녕하세요" not in b for b in bodies))
             self.assertTrue(any("지쳤습니다" in b and "안녕하세요" not in b for b in bodies))
+
+    def test_caption_block_stays_inside_shorts_safe_area(self):
+        self.assertGreaterEqual(CAPTION_MARGIN_V, SAFE_TOP)
+        text_bottom = CAPTION_MARGIN_V + int(CAPTION_FONT_SIZE * MAX_CAPTION_LINES * 1.45)
+        self.assertLess(text_bottom, SAFE_BOTTOM)
+        self.assertGreaterEqual(VIDEO_WIDTH - SAFE_RIGHT, 160)
 
     def test_background_is_paper_color(self):
         from PIL import Image

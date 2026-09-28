@@ -56,7 +56,12 @@ class UploadHelperTests(unittest.TestCase):
         self.assertIn("#Shorts", meta["description"])
         self.assertIn("남편이 외모를 평가해요.", meta["description"])
         self.assertIn("여러분이라면 어떻게 하겠어요?", meta["description"])
+        self.assertIn("오후 7시", meta["description"])
         self.assertIn("Shorts", meta["tags"])
+        self.assertIn("사이다", meta["tags"])
+        self.assertFalse(meta["title"].startswith("EP"))
+        self.assertTrue(meta["title"].startswith("외모를 평가하는 남편"))
+        self.assertIn("waitmybabe", meta["title"])
 
     def test_shorts_title_stays_within_limit(self):
         title = shorts_title("가" * 120)
@@ -173,7 +178,8 @@ class UploadHelperTests(unittest.TestCase):
 
     def test_threads_promo_includes_short_url(self):
         text = build_threads_text(_script(), video_id="abc123")
-        self.assertIn("EP.40", text)
+        self.assertNotIn("EP.40", text)
+        self.assertIn("외모를 평가하는 남편", text)
         self.assertIn("https://youtube.com/shorts/abc123", text)
 
 

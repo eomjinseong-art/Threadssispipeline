@@ -27,6 +27,10 @@ from shorts_style import (
     INTRO_DURATION,
     INTRO_FG,
     MAX_DURATION_SEC,
+    SAFE_BOTTOM,
+    SAFE_LEFT,
+    SAFE_RIGHT,
+    SAFE_TOP,
     VIDEO_FPS,
     VIDEO_HEIGHT,
     VIDEO_WIDTH,
@@ -36,6 +40,7 @@ from shorts_style import (
     resolve_korean_font,
     wrap_korean,
 )
+from story_format import strip_leading_ep
 
 FFMPEG_VIDEO_ARGS = [
     "-r", str(VIDEO_FPS),
@@ -102,13 +107,25 @@ def fontsdir_for_ass() -> str:
     return os.path.dirname(os.path.abspath(font_path))
 
 
+def _hook_layout(title: str) -> tuple[object, list[str]]:
+    """한 줄 갈등이 안전 영역 안에 들어가게 글자 크기를 줄인다."""
+    max_width = SAFE_RIGHT - SAFE_LEFT
+    font = get_font(78)
+    lines = wrap_korean(title, font, max_width)
+    size = 78
+    while len(lines) > 3 and size > 52:
+        size -= 6
+        font = get_font(size)
+        lines = wrap_korean(title, font, max_width)
+    return font, lines[:3]
+
+
 def build_intro_card(title: str, out_path: str) -> None:
-    """검은 배경에 흰 한글 제목을 가운데 정렬한 인트로 카드."""
+    """베이지 배경에 갈등 훅을 안전 영역 안에 크게 둔다. 길이는 1~2초."""
     img = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), INTRO_BG)
     draw = ImageDraw.Draw(img)
-    font = get_font(72)
-    max_width = VIDEO_WIDTH - 160
-    lines = wrap_korean(title, font, max_width)
+    font, lines = _hook_layout(title)
+    max_width = SAFE_RIGHT - SAFE_LEFT
 
     line_heights: list[int] = []
     line_widths: list[int] = []
@@ -116,13 +133,14 @@ def build_intro_card(title: str, out_path: str) -> None:
         bbox = draw.textbbox((0, 0), line, font=font)
         line_widths.append(bbox[2] - bbox[0])
         line_heights.append(bbox[3] - bbox[1])
-    spacing = 18
+    spacing = 16
     total_h = sum(line_heights) + spacing * max(0, len(lines) - 1)
-    y = (VIDEO_HEIGHT - total_h) // 2
-    for line, w, h in zip(lines, line_widths, line_heights):
-        x = (VIDEO_WIDTH - w) // 2
+    band_h = SAFE_BOTTOM - SAFE_TOP
+    y = SAFE_TOP + max(0, (band_h - total_h) // 2)
+    for line, width, height in zip(lines, line_widths, line_heights):
+        x = SAFE_LEFT + max(0, (max_width - width) // 2)
         draw.text((x, y), line, font=font, fill=INTRO_FG)
-        y += h + spacing
+        y += height + spacing
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     img.save(out_path)
@@ -292,13 +310,16 @@ def assemble_from_manifest(
     with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
 
-    title = manifest.get("title") or "언니들의 사연"
+    title = manifest.get("title") or "오늘의 사연"
+    hook = manifest.get("hook") or ""
     row_index = manifest.get("row_index")
     if script_path:
         with open(script_path, encoding="utf-8") as f:
             script = json.load(f)
         title = script.get("title", title)
+        hook = script.get("hook") or hook
         row_index = script.get("row_index", row_index)
+    card_text = strip_leading_ep(hook or title)
 
     if row_index is None:
         raise SystemExit("manifest/script 에 row_index가 없습니다. 행 기반 경로를 사용하세요.")
@@ -310,8 +331,8 @@ def assemble_from_manifest(
     os.makedirs(work_dir, exist_ok=True)
 
     intro_path = os.path.join(work_dir, "intro.mp4")
-    print(f"[intro] 타이틀 카드 {INTRO_DURATION:.1f}초: {title}")
-    build_intro_segment(title, intro_path)
+    print(f"[intro] 훅 카드 {INTRO_DURATION:.1f}초: {card_text}")
+    build_intro_segment(card_text, intro_path)
 
     segment_paths = [intro_path]
     for slide in manifest["slides"]:

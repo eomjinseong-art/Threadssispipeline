@@ -1,6 +1,6 @@
 # 언니들 사연 → YouTube Shorts 자동화
 
-구글 시트에서 **YouTube 열이 `대기`인 사연 1개**(EP가 가장 작은 것)를 가져와 세로 Shorts를 만들고 [waitmybabe](https://www.youtube.com/@waitmybabe) 채널에 올립니다.
+구글 시트에서 **YouTube 열이 `대기`인 사연 1개**를 여성 1인칭 반전 숏폼으로 만들어 [waitmybabe](https://www.youtube.com/@waitmybabe) 채널에 올립니다. 3언니 반응 열은 Threads용으로만 남기고 Shorts 내레이션에는 넣지 않습니다.
 
 Threads `Status`와는 완전히 별개입니다. 이 파이프라인은 Threads에 글을 올리지 않고, `Status` 칸도 바꾸지 않습니다.
 
@@ -28,11 +28,9 @@ GitHub Actions `daily-shorts-pipeline` (`.github/workflows/daily_shorts.yml`):
 
 | 한국시간(KST) | UTC |
 | --- | --- |
-| 오전 9시 | 00:00 |
-| 오후 6시 | 09:00 |
-| 오후 9시 | 12:00 |
+| 오후 7시 | 10:00 |
 
-한 실행에 한 에피소드. 수동: Actions → **daily-shorts-pipeline** → Run workflow.
+하루 1편. 같은 한국 날짜에 채널 업로드가 이미 있으면 렌더·업로드·시트 완료 표시를 하지 않습니다. 수동 실행이 스케줄과 겹쳐도 `shorts-publish` 그룹에서 한 번에 하나만 진행합니다. 수동: Actions → **daily-shorts-pipeline** → Run workflow.
 
 각 실행:
 
@@ -46,7 +44,7 @@ GitHub Actions `daily-shorts-pipeline` (`.github/workflows/daily_shorts.yml`):
 
 ## Threads 자동 배포
 
-`daily-threads-pipeline` (`.github/workflows/daily_threads.yml`)는 Shorts보다 30분 늦게 `Status=대기` 행 하나를 Threads에 올립니다. 게시가 성공한 뒤에만 `Status=완료`로 바꿉니다. Shorts는 `YouTube` 열만 읽고 쓰며 `Status`는 바꾸지 않으므로 두 큐가 겹치지 않습니다. Shorts 워크플로는 Threads 토큰을 쓰지 않습니다.
+`daily-threads-pipeline` (`.github/workflows/daily_threads.yml`)는 Shorts와 별도로 `Status=대기` 행 하나를 Threads에 올립니다. 게시가 성공한 뒤에만 `Status=완료`로 바꿉니다. Shorts는 `YouTube` 열만 읽고 쓰며 `Status`는 바꾸지 않으므로 두 큐가 겹치지 않습니다. Threads 글에는 현실언니/공감언니/폭주언니 줄을 그대로 넣습니다. Shorts 워크플로는 Threads 토큰을 쓰지 않습니다.
 
 | 한국시간(KST) | UTC |
 | --- | --- |
@@ -98,6 +96,9 @@ python -m unittest discover -s tests
 
 # 시트/업로드 없이 QA 렌더
 python make_shorts.py --script tests/fixtures/script_ep102.json --dry-run
+
+# 시트에 붙일 새 사연 목록만 확인
+python append_sheet_topics.py --dry-run
 ```
 
 업로드는 QA를 통과한 뒤에만 하세요.
@@ -112,9 +113,18 @@ python upload_video.py --video output/final_row43.mp4 --script output/script_row
 ## 영상 스펙
 
 - 1080×1920, 25fps, H.264 + AAC 44.1kHz 스테레오, 60초 미만
-- 인트로 ~2.2초: 검은 배경 + 흰 제목. 공백에서 줄바꿈, 한글 1글자 고아 금지
-- 본문: 종이색 RGB(246,246,244). 자막은 위쪽에 2~3줄만 (가운데로 재정렬되며 커지는 벽 없음)
+- 처음 1.8초: 소프트 베이지 배경 + 갈등 한 줄(훅). 검은 카드는 쓰지 않습니다.
+- 본문: 여성 목소리(`ko-KR-SunHiNeural`)로 1인칭 사연과 사이다 반전을 읽고, 마지막에 댓글 질문을 읽습니다. 3언니 대사는 읽지 않습니다.
+- 자막은 Shorts 안전 영역 안(위 검색창, 오른쪽 버튼, 아래 제목/설명 밖)에 2~3줄만
+- 제목은 갈등으로 시작하고 `EP.`로 시작하지 않습니다. 채널 이름은 끝에 `| waitmybabe`로 붙일 수 있습니다.
+- 시트 행이 예전 3언니 문체여도 사연 본문으로 만들고, `topics/adapted_10.csv`에 있는 EP는 생성 때 반전을 붙입니다.
 - `assets/bgm.mp3`: 직접 만든 12초 펜타토닉 플럭+패드 루프. TTS 아래에도 바닥에 남김
+
+## 새 사연 추가
+
+`python append_sheet_topics.py` 가 `topics/w01_w21.csv`를 시트 **끝**에 추가합니다. 기존 행은 지우거나 덮어쓰지 않고, 같은 제목은 건너뜁니다. `adapted_10.csv`의 원본 EP가 이미 있으면 행을 더 넣지 않고 Shorts를 만들 때 각색합니다. 자격 증명 없이 목록만 보려면 `python append_sheet_topics.py --dry-run`.
+
+YouTube 대기 또는 Threads 대기가 10개 미만이면 `generate_more_stories.py`가 같은 반전 형식으로 50개를 보충합니다. Threads용 3언니 줄도 같이 채웁니다. 고를 때는 새 원작 제목을 먼저, 그다음 각색 대상 EP, 그다음 가장 작은 EP를 쓰고 중복 제목은 건너뜁니다.
 
 ## 시트 컬럼
 

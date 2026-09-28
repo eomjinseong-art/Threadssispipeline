@@ -12,7 +12,7 @@ import argparse
 from assemble_video import assemble_from_manifest
 from fetch_script import fetch_pending_script, load_worksheet, mark_youtube_complete
 from generate_media import generate_media
-from upload_video import notify_failure, upload_short
+from upload_video import already_posted_short_today, notify_failure, upload_short
 
 
 def run(
@@ -24,6 +24,10 @@ def run(
     ws = None
     row_index = None
     script = None
+
+    if not dry_run and not script_path and already_posted_short_today():
+        print("오늘(KST) 이미 Shorts를 올렸습니다. 하루 1편(19:00 KST)이라 이번 회차는 건너뜁니다.")
+        return 0
 
     if script_path:
         import json

@@ -28,6 +28,7 @@ YouTube 성공 후에만 처리한다.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 
@@ -39,7 +40,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from PIL import Image, ImageDraw
 
-from shorts_style import get_font, thumbnail_path_for_row, wrap_korean
+from shorts_style import INTRO_BG, INTRO_FG, get_font, thumbnail_path_for_row, wrap_korean
+from story_format import DEFAULT_QUESTION, ensure_curiosity, strip_leading_ep, youtube_title
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
@@ -50,16 +52,16 @@ SCOPES = [
 CLIENT_SECRET_PATH = "client_secret.json"
 TOKEN_PATH = "token.json"
 
-HASHTAGS = "#Shorts #사연 #고민상담 #카톡썰 #언니들 #사이다"
-SCHEDULE_NOTE = "매일 오전 9시 · 오후 6시 · 오후 9시 새 사연 올라옵니다"
+HASHTAGS = "#Shorts #사연 #사이다 #공감 #시월드 #반전"
+SCHEDULE_NOTE = "매일 오후 7시 새 사연이 올라옵니다"
 PINNED_COMMENT_TEMPLATE = (
-    "오늘 사연 어떠셨나요? 여러분이라면 어떻게 하셨을 것 같아요? 👇\n"
-    "비슷한 사연 있으면 댓글로 남겨주세요, 다음 에피소드 소재로 쓸 수도 있어요!\n"
-    "매일 오전 9시·오후 6시·오후 9시 새 사연 올라옵니다 🔔"
+    "여러분이라면 참으실 수 있나요?\n"
+    "여러분은 어느 쪽이신가요? 댓글로 남겨 주세요.\n"
+    "매일 오후 7시에 새 사연이 올라옵니다"
 )
+KST = dt.timezone(dt.timedelta(hours=9))
 
 THUMBNAIL_SIZE = (1280, 720)
-TITLE_MAX_LEN = 100
 THREADS_API_BASE = "https://graph.threads.net/v1.0"
 THREADS_MAX_CHARS = 500
 
@@ -250,36 +252,39 @@ def _story_and_question(script: dict) -> tuple[str, str]:
 
 
 def shorts_title(raw_title: str) -> str:
-    title = (raw_title or "언니들의 사연").strip()
-    if "#Shorts" not in title and "#shorts" not in title.lower():
-        suffix = " #Shorts"
-        if len(title) + len(suffix) <= TITLE_MAX_LEN:
-            title = title + suffix
-    return title[:TITLE_MAX_LEN]
+    return youtube_title(raw_title or "이 상황, 결말은?")
+
+
+def display_title(raw_title: str) -> str:
+    """썸네일용. EP·#Shorts·채널 접미 없이 갈등 제목만."""
+    return ensure_curiosity(strip_leading_ep(raw_title or ""))
 
 
 def build_metadata(script: dict) -> dict:
-    title = shorts_title(script.get("title") or "언니들의 사연")
+    title = shorts_title(script.get("title") or "이 상황, 결말은?")
     story_summary, question = _story_and_question(script)
     if len(story_summary) > 300:
         story_summary = story_summary[:297] + "..."
+    if not question:
+        question = DEFAULT_QUESTION
 
     description = (
         f"{story_summary}\n\n"
         f"{question}\n\n"
-        "여러분 생각은 댓글로 알려주세요 👇\n"
+        "댓글로 이야기 나눠 주세요.\n"
         f"{SCHEDULE_NOTE}\n\n"
         f"{HASHTAGS}"
     )
-    tags = ["Shorts", "사연", "고민상담", "카톡썰", "언니들", "사이다", "썰", "인간관계"]
+    tags = ["Shorts", "사연", "사이다", "공감", "시월드", "반전", "인간관계", "썰"]
     return {"title": title, "description": description, "tags": tags}
 
 
 def build_thumbnail(title: str, out_path: str) -> None:
-    img = Image.new("RGB", THUMBNAIL_SIZE, color=(10, 10, 10))
+    img = Image.new("RGB", THUMBNAIL_SIZE, color=INTRO_BG)
     draw = ImageDraw.Draw(img)
     font = get_font(72)
-    wrapped_lines = wrap_korean(title.replace(" #Shorts", ""), font, THUMBNAIL_SIZE[0] - 80)
+    clean = display_title(title)
+    wrapped_lines = wrap_korean(clean, font, THUMBNAIL_SIZE[0] - 80)
 
     line_heights = []
     for line in wrapped_lines:
@@ -293,7 +298,7 @@ def build_thumbnail(title: str, out_path: str) -> None:
         bbox = draw.textbbox((0, 0), line, font=font)
         w = bbox[2] - bbox[0]
         x = (THUMBNAIL_SIZE[0] - w) // 2
-        draw.text((x, y), line, font=font, fill=(255, 255, 255))
+        draw.text((x, y), line, font=font, fill=INTRO_FG)
         y += h + line_spacing
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -356,9 +361,73 @@ def upload_video(creds: Credentials, video_path: str, metadata: dict) -> str:
     return response["id"]
 
 
+def pinned_comment_for(script: dict) -> str:
+    _story, question = _story_and_question(script)
+    question = (question or "").strip() or DEFAULT_QUESTION
+    return (
+        f"{question}\n"
+        "여러분은 어느 쪽이신가요? 댓글로 남겨 주세요.\n"
+        f"{SCHEDULE_NOTE}"
+    )
+
+
+def published_on_kst_day(published_at: str, today: dt.date | None = None) -> bool:
+    """YouTube publishedAt(UTC)이 한국 날짜 기준 today인지."""
+    if not published_at:
+        return False
+    stamp = dt.datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    day = today if today is not None else dt.datetime.now(KST).date()
+    return stamp.astimezone(KST).date() == day
+
+
+def channel_posted_on_kst_day(published_ats: list[str], today: dt.date | None = None) -> bool:
+    return any(published_on_kst_day(item, today) for item in published_ats)
+
+
+def _has_youtube_credentials() -> bool:
+    if os.environ.get("YOUTUBE_TOKEN_JSON", "").strip():
+        return True
+    if os.environ.get("YOUTUBE_REFRESH_TOKEN", "").strip():
+        return True
+    return os.path.exists(TOKEN_PATH)
+
+
+def _uploads_published_at(creds: Credentials) -> list[str]:
+    youtube = build("youtube", "v3", credentials=creds)
+    channel = youtube.channels().list(part="contentDetails", mine=True, maxResults=1).execute()
+    items = channel.get("items") or []
+    if not items:
+        return []
+    playlist_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    listed = youtube.playlistItems().list(
+        part="snippet",
+        playlistId=playlist_id,
+        maxResults=8,
+    ).execute()
+    stamps = []
+    for item in listed.get("items") or []:
+        snippet = item.get("snippet") or {}
+        stamps.append(str(snippet.get("publishedAt") or ""))
+    return stamps
+
+
+def already_posted_short_today() -> bool:
+    """오늘(KST) 채널에 영상이 있으면 True. 자격 증명이 없으면 False."""
+    if not _has_youtube_credentials():
+        return False
+    try:
+        creds = get_credentials()
+        return channel_posted_on_kst_day(_uploads_published_at(creds))
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"[안내] 오늘 업로드 여부 확인에 실패했습니다. 하루 1회 스케줄이라 계속합니다: {exc}")
+        return False
+
+
 def build_threads_text(script: dict, video_id: str | None = None) -> str:
     """업로드 성공 후 스레드 홍보 문구. 실패해도 호출측에서 무시한다."""
-    title = script.get("title") or "언니들의 사연"
+    title = display_title(script.get("title") or "") or "오늘의 사연"
     _story, question = _story_and_question(script)
     parts = [title, "", question]
     if video_id:
@@ -447,7 +516,7 @@ def upload_short(video_path: str, script_path: str) -> str:
         set_thumbnail(creds, video_id, thumbnail_path)
     except Exception as e:
         print(f"  [경고] 썸네일 처리 실패: {e}")
-    post_pinned_style_comment(creds, video_id, PINNED_COMMENT_TEMPLATE)
+    post_pinned_style_comment(creds, video_id, pinned_comment_for(script))
 
     print(f"완료: https://youtube.com/shorts/{video_id}")
     return video_id
