@@ -1,7 +1,7 @@
 name: daily-threads-pipeline
 
-# Shorts(UTC 00:00 / 09:00 / 12:00)보다 30분 뒤.
-# 한국시간(KST) 09:30 / 18:30 / 21:30. Shorts는 YouTube 열만 사용한다.
+# Threads는 Shorts(하루 1편, 19:00 KST)와 별도 큐다.
+# 한국시간(KST) 09:30 / 18:30 / 21:30. Status 열만 사용한다.
 on:
   schedule:
     - cron: "30 0,9,12 * * *"

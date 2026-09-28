@@ -16,6 +16,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 from openai import OpenAI
 
+from story_format import ensure_curiosity, normalize_title, strip_leading_ep
+
 SHEET_ID = "1AOvI5ExbZ4j_BJHZvZnWnXExCDOebjxgsiRr7SWfuDE"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -24,22 +26,26 @@ MIN_PENDING = 10
 PENDING_STATUS = "대기"
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
-SYSTEM_PROMPT = """당신은 한국어 쓰레드(Threads)용 "사연" 콘텐츠 작가입니다.
-여성들이 직장·연애·가족에게 사연을 올리는 톤을 씁니다.
+SYSTEM_PROMPT = """당신은 한국어 숏폼·쓰레드용 창작 사연 작가입니다.
+여성 1인칭입니다. 불공평한 장면으로 시작해, 주인공이 증거·제3자·정중하지만
+날카로운 한마디로 되갚는 사이다 반전으로 끝냅니다.
+실제 게시글, 뉴스, 실존 인물의 사연은 베끼지 마세요. 전부 창작입니다.
 
 각 사연은 반드시 이 필드를 포함합니다:
-- title: 사연 제목 (10자 내외, 자극적)
-- story_lines: 상황을 서술하는 문장 6~8줄 (배열), 1인칭 시점, 각 문장은
-  한 줄짜리 캡션에 어울리게 짧고 명확하게. 도입(상황)→전개→갈등/감정
-  흐름이 보이게 작성
-- real: 리얼언니 댓글 1줄 - 팩트체크스럽고 직설적인 반응
-- empathy: 공감언니 댓글 1줄 - 감정을 알아주는 반응
-- rage: 분노언니 댓글 1줄 - 화나고 직설적인 반응/응원
-- question: 독자용 질문 1줄 - "여러분이라면 ~하시겠어요?" 형식
+- title: 갈등과 호기심이 앞에 오는 제목. 예: "도어락 비번 알아낸 시어머니, 결말은?"
+  EP 번호는 넣지 마세요. 앞 20자 안에 가해자와 선을 넘은 행동이 보이게.
+- story_lines: 6~8줄 배열. 1인칭. 한 줄에 한 문장.
+  첫 줄은 화면 첫 1~2초에 쓸 갈등 훅. 가운데는 상대의 구체적인 한마디.
+  마지막 1~2줄은 사이다 반전으로 끝내세요. 3언니 대사로 끝내지 마세요.
+- real: 현실언니 댓글 1줄. Threads에만 씁니다. 숏폼 내레이션에는 안 들어갑니다.
+- empathy: 공감언니 댓글 1줄. Threads용.
+- rage: 폭주언니 댓글 1줄. Threads용.
+- question: 댓글이 갈리는 질문 1줄. "여러분이라면 ~?" 형식.
 
-소재는 직장/연애/친구/가족/시댁 인간관계에서 흔히 겪는 갈등, 배신 느낌,
-경계 침해, 부당한 요구 등을 다룹니다. 자살, 미성년 성적 착취, 과도한
-혐오 표현 등 위험한 소재는 쓰지 않습니다.
+주제 비중: 10편 중 6편 이상은 시댁·시어머니·남편·가족 경계(내 공간, 내 돈,
+내 공로, 내 육아)처럼 댓글이 양쪽으로 갈리는 상황. 나머지는 연인, 직장 동료,
+친구의 선 넘기.
+자살, 미성년 대상 성적 내용, 범죄 실행 방법, 혐오 선동은 쓰지 마세요.
 
 반드시 JSON 배열만 출력하세요. 다른 설명이나 마크다운을 붙이지 마세요.
 스키마: [{"title": str, "story_lines": [str, ...], "real": str,
@@ -74,14 +80,23 @@ def count_pending(records: list[dict]) -> int:
     )
 
 
+def count_youtube_pending(records: list[dict]) -> int:
+    """YouTube 열 기준 대기. 칸이 비어 있으면 EP 시드 규칙을 따른다."""
+    from fetch_script import effective_youtube_status
+
+    return sum(1 for row in records if effective_youtube_status(row) == PENDING_STATUS)
+
+
 def should_generate(records: list[dict]) -> tuple[bool, list[str], int, int]:
+    """Threads 대기 또는 YouTube 대기가 10개 미만이면 보충한다."""
     pending = count_pending(records)
+    youtube_pending = count_youtube_pending(records)
     ep_numbers = [n for n in (ep_to_int(r.get("EP", "")) for r in records) if n is not None]
     max_ep_num = max(ep_numbers, default=0)
     next_ep_num = max_ep_num + 1
     titles = [str(r.get("제목", "")).strip() for r in records if str(r.get("제목", "")).strip()]
 
-    if pending >= MIN_PENDING:
+    if pending >= MIN_PENDING and youtube_pending >= MIN_PENDING:
         return False, titles, next_ep_num, pending
 
     return True, titles, next_ep_num, pending
@@ -94,7 +109,9 @@ def generate_chunk(client: OpenAI, existing_titles: list[str], count: int) -> li
     used_titles_text = "\n".join(f"- {t}" for t in existing_titles) or "(없음)"
     user_prompt = (
         f"아래는 이미 쓴 제목 목록입니다. 겹치지 않는 완전히 새로운 사연을 "
-        f"{count}개만 만들어주세요.\n\n{used_titles_text}\n\n"
+        f"{count}개만 만들어주세요. 제목은 EP로 시작하지 말고, 첫 줄은 갈등 훅, "
+        f"마지막 줄은 사이다 반전으로 쓰세요. 댓글이 갈리는 시댁·가족 경계를 더 많이.\n\n"
+        f"{used_titles_text}\n\n"
         f"JSON 배열 {count}개, 스키마 그대로 지켜주세요."
     )
 
@@ -165,20 +182,35 @@ def validate_story(story: dict, idx: int) -> list[str]:
     return errors
 
 
+def drop_duplicate_stories(stories: list[dict], existing_titles: list[str]) -> list[dict]:
+    """이미 있는 제목, 그리고 이번 배치 안의 중복 제목은 버린다."""
+    seen = {normalize_title(title) for title in existing_titles}
+    seen.discard("")
+    kept: list[dict] = []
+    for story in stories:
+        key = normalize_title(str(story.get("title", "")))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        kept.append(story)
+    return kept
+
+
 def stories_to_rows(stories: list[dict], start_ep_num: int) -> list[list[str]]:
     rows = []
-    for i, s in enumerate(stories):
+    for i, story in enumerate(stories):
         ep_label = f"{start_ep_num + i:03d}"
-        story_text = "\n".join(s["story_lines"])
+        story_text = "\n".join(story["story_lines"])
+        title = ensure_curiosity(strip_leading_ep(str(story.get("title", ""))))
         rows.append([
             PENDING_STATUS,
             ep_label,
-            s["title"],
+            title,
             story_text,
-            s["real"],
-            s["empathy"],
-            s["rage"],
-            s["question"],
+            story["real"],
+            story["empathy"],
+            story["rage"],
+            story["question"],
         ])
     return rows
 
@@ -190,17 +222,18 @@ def main():
 
     records = ws.get_all_records()
     trigger, existing_titles, next_ep_num, pending = should_generate(records)
+    youtube_pending = count_youtube_pending(records)
 
     if not trigger:
         print(
-            f"재고 충분(대기 {pending}개 ≥ {MIN_PENDING}) - 건너뜀. "
-            f"다음 EP 후보: {next_ep_num:03d}"
+            f"재고 충분(Threads 대기 {pending}개, YouTube 대기 {youtube_pending}개, "
+            f"둘 다 ≥ {MIN_PENDING}) - 건너뜀. 다음 EP 후보: {next_ep_num:03d}"
         )
         return
 
     print(
-        f"대기 사연 {pending}개 < {MIN_PENDING}. "
-        f"EP.{next_ep_num:03d}부터 {BATCH_SIZE}개 생성 시작... (OpenAI)"
+        f"재고 부족(Threads 대기 {pending}개, YouTube 대기 {youtube_pending}개, "
+        f"기준 {MIN_PENDING}). EP.{next_ep_num:03d}부터 {BATCH_SIZE}개 생성 시작... (OpenAI)"
     )
 
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -209,6 +242,10 @@ def main():
     client = OpenAI(api_key=api_key)
 
     stories = generate_stories(client, existing_titles, BATCH_SIZE)
+    before = len(stories)
+    stories = drop_duplicate_stories(stories, existing_titles)
+    if len(stories) != before:
+        print(f"[안내] 기존 제목과 겹치는 사연 {before - len(stories)}개를 제외했습니다.")
 
     all_errors = []
     for i, s in enumerate(stories, start=1):

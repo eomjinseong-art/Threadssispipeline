@@ -21,7 +21,18 @@ from assemble_video import (
     run,
 )
 from generate_media import build_background, build_typing_ass
-from shorts_style import INTRO_BG, VIDEO_HEIGHT, VIDEO_WIDTH, find_bgm_path
+from shorts_style import (
+    INTRO_BG,
+    INTRO_DURATION,
+    INTRO_FG,
+    SAFE_BOTTOM,
+    SAFE_LEFT,
+    SAFE_RIGHT,
+    SAFE_TOP,
+    VIDEO_HEIGHT,
+    VIDEO_WIDTH,
+    find_bgm_path,
+)
 
 
 def _ffprobe_json(path: str) -> dict:
@@ -52,20 +63,32 @@ class AssembleHelperTests(unittest.TestCase):
         escaped = escape_ass_path_for_filter(r"C:\temp\00.ass")
         self.assertIn("\\:", escaped)
 
-    def test_intro_card_is_mostly_black_with_white_title(self):
+    def test_intro_card_is_beige_hook_inside_safe_area(self):
         from PIL import Image
 
+        self.assertGreaterEqual(INTRO_DURATION, 1.0)
+        self.assertLessEqual(INTRO_DURATION, 2.0)
+        self.assertNotEqual(INTRO_BG, (0, 0, 0))
+        self.assertGreater(INTRO_BG[0], 200)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "intro.png"
-            build_intro_card("EP.40 외모를 평가하는 남편", str(path))
+            build_intro_card("도어락 비번 알아낸 시어머니, 결말은?", str(path))
             img = Image.open(path).convert("RGB")
             self.assertEqual(img.size, (VIDEO_WIDTH, VIDEO_HEIGHT))
             self.assertEqual(img.getpixel((20, 20)), INTRO_BG)
-            pixels = list(img.getdata())
-            blackish = sum(1 for r, g, b in pixels if r < 20 and g < 20 and b < 20)
-            self.assertGreater(blackish / len(pixels), 0.85)
-            bright = sum(1 for r, g, b in pixels if r > 200 and g > 200 and b > 200)
-            self.assertGreater(bright, 200)
+            ink = []
+            for y in range(img.height):
+                for x in range(img.width):
+                    pixel = img.getpixel((x, y))
+                    if sum(pixel) + 90 < sum(INTRO_BG):
+                        ink.append((x, y))
+            self.assertGreater(len(ink), 200)
+            for x, y in ink:
+                self.assertGreaterEqual(x, SAFE_LEFT - 2, (x, y))
+                self.assertLess(x, SAFE_RIGHT + 2, (x, y))
+                self.assertGreaterEqual(y, SAFE_TOP - 2, (x, y))
+                self.assertLess(y, SAFE_BOTTOM, (x, y))
+            self.assertNotEqual(INTRO_FG, (255, 255, 255))
 
     def test_mix_bgm_skips_missing_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,9 +144,18 @@ class AssembleHelperTests(unittest.TestCase):
             img = Image.open(frame).convert("RGB")
             w, h = img.size
             # Alignment 8 + MarginV 520: 자막은 화면 위쪽 고정 (가운데 재정렬 안 함)
-            box = img.crop((w // 8, 480, w * 7 // 8, 820))
+            box = img.crop((w // 8, 480, min(w * 7 // 8, 900), 820))
             dark = sum(1 for r, g, b in box.getdata() if (r + g + b) / 3 < 90)
             self.assertGreater(dark, 80, "자막이 타지 않은 것 같습니다")
+            right = img.crop((w - 150, 0, w, h))
+            right_dark = sum(1 for r, g, b in right.getdata() if (r + g + b) / 3 < 90)
+            self.assertLess(right_dark, 40, "오른쪽 버튼 영역에 자막이 있습니다")
+            top = img.crop((0, 0, w, 200))
+            top_dark = sum(1 for r, g, b in top.getdata() if (r + g + b) / 3 < 90)
+            self.assertLess(top_dark, 40, "위 검색창 영역에 자막이 있습니다")
+            bottom = img.crop((0, h - 420, w, h))
+            bottom_dark = sum(1 for r, g, b in bottom.getdata() if (r + g + b) / 3 < 90)
+            self.assertLess(bottom_dark, 40, "하단 제목 영역에 자막이 있습니다")
 
     def test_concat_keeps_intro_then_content(self):
         from PIL import Image

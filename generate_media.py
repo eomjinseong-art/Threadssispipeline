@@ -29,7 +29,10 @@ from PIL import Image, ImageDraw
 
 from shorts_style import (
     BG_COLOR,
+    CAPTION_FONT_SIZE,
+    CAPTION_MARGIN_V,
     LABEL_COLOR,
+    QUESTION_BG,
     SAFE_LEFT,
     SAFE_RIGHT,
     SAFE_TOP,
@@ -42,12 +45,13 @@ from shorts_style import (
     segments_dir_for_row,
 )
 
+# 여성 1인칭 화자. 3언니를 번갈아 읽지 않는다.
 VOICE = "ko-KR-SunHiNeural"
-RATE = "+28%"
+RATE = "+12%"
 # edge-tts 7.x 기본값은 SentenceBoundary. 타이핑 자막을 만들려면 반드시 WordBoundary.
 EDGE_TTS_BOUNDARY = "WordBoundary"
 
-SLIDE_LABELS = {"story": "사연", "reactions": "언니들의 반응", "question": "여러분의 생각은?"}
+SLIDE_LABELS = {"story": "", "reactions": "", "question": "", "hook": ""}
 
 SPEAKER_ASS_COLORS = {
     "현실언니": "&H00DD8A37",
@@ -278,7 +282,8 @@ def build_typing_ass(
     Alignment 8(상단 고정)이라 글자가 늘어도 화면 가운데로 다시 모이지 않는다.
     """
     font_name = ass_font_name()
-    # Alignment 8 = 위 가운데. MarginV 는 라벨(사연) 아래.
+    # Alignment 8 = 위 가운데. 자막은 검색창 아래, 오른쪽 버튼·하단 설명 밖에 둔다.
+    margin_r = VIDEO_WIDTH - SAFE_RIGHT
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {VIDEO_WIDTH}
@@ -287,7 +292,7 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},54,{TEXT_COLOR_ASS},&H000000FF,&H00FAFAFA,&H00FAFAFA,-1,0,0,0,100,100,0,0,1,0,0,8,{SAFE_LEFT},{VIDEO_WIDTH - SAFE_RIGHT},520,1
+Style: Default,{font_name},{CAPTION_FONT_SIZE},{TEXT_COLOR_ASS},&H000000FF,&H00F0E6DC,&H00F0E6DC,-1,0,0,0,100,100,0,0,1,0,0,8,{SAFE_LEFT},{margin_r},{CAPTION_MARGIN_V},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -350,8 +355,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def build_background(slide_type: str, out_path: str) -> None:
-    """텍스트 없이 라벨만 있는 배경 카드 - 본문 자막은 ffmpeg가 실시간으로 그린다."""
-    img = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), BG_COLOR)
+    """텍스트 없는 베이지 배경. 본문 자막은 ffmpeg가 안전 영역에 그린다."""
+    color = QUESTION_BG if slide_type == "question" else BG_COLOR
+    img = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), color)
     draw = ImageDraw.Draw(img)
     label = SLIDE_LABELS.get(slide_type, "")
     if label:

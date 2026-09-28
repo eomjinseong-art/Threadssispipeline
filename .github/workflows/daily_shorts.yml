@@ -1,11 +1,16 @@
 # 유튜브 쇼츠 파이프라인
-# 한국시간 오전 9시 / 오후 6시 / 오후 9시 = UTC 00:00 / 09:00 / 12:00
+# 한국시간 오후 7시 하루 1편 = UTC 10:00
+# 업로드 직전에도 오늘(KST) 이미 올린 영상이 있으면 make_shorts.py 가 건너뛴다.
 name: daily-shorts-pipeline
 
 on:
   schedule:
-    - cron: "0 0,9,12 * * *"
+    - cron: "0 10 * * *"
   workflow_dispatch: {}
+
+concurrency:
+  group: shorts-publish
+  cancel-in-progress: false
 
 jobs:
   shorts:
@@ -31,6 +36,12 @@ jobs:
 
       - name: 단위 테스트
         run: python -m unittest discover -s tests
+
+      - name: "신규 반전 사연을 시트 끝에 추가 (기존 행 유지, 중복 제목은 건너뜀)"
+        continue-on-error: true
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+        run: python append_sheet_topics.py
 
       - name: "0단계: 사연 재고 자동 보충 (조건부)"
         continue-on-error: true

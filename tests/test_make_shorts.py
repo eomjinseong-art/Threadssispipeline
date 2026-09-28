@@ -75,6 +75,14 @@ class MakeShortsOrchestratorTests(unittest.TestCase):
         threads.assert_not_called()
         mark.assert_called_once()
 
+    @patch("make_shorts.already_posted_short_today", return_value=True)
+    @patch("make_shorts.fetch_pending_script")
+    @patch("make_shorts.load_worksheet")
+    def test_skips_when_channel_already_posted_today(self, load_ws, fetch, _posted):
+        self.assertEqual(run(), 0)
+        fetch.assert_not_called()
+        load_ws.assert_not_called()
+
     @patch("make_shorts.mark_youtube_complete")
     @patch("make_shorts.upload_short")
     @patch("make_shorts.assemble_from_manifest", return_value="output/final_row102.mp4")
