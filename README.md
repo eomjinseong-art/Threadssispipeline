@@ -4,6 +4,17 @@
 
 Threads `Status`와는 완전히 별개입니다. 이 파이프라인은 Threads에 글을 올리지 않고, `Status` 칸도 바꾸지 않습니다.
 
+## 디자인: EP.67 전용 (2026-10-02~)
+
+waitmybabe Shorts는 **EP.67 '내가 차린 제사상, 시어머니 공으로?'(https://youtube.com/shorts/wxTOaqAf51M) 디자인만** 씁니다.
+웜 베이지 + `오늘의 사연 · EP.N` 라벨, 명조체 훅 카드, 흰 스토리 카드(로즈 라인), 단톡방 말풍선·사진 카드, 강조 카드, 공감 질문 + 창작 표기. 45~58초.
+
+- 렌더러: `sayeon_engine/` (`sayeon_render.py`가 호출). 폰트: Noto CJK·Noto Color Emoji(apt), Gowun Batang(`assets/fonts/`).
+- 대기 행마다 **손으로 쓴 스펙** `sayeon_specs/sayeon_epNNN.json`이 필요합니다. `topic`에 시트 `제목`을 그대로 적습니다(", 결말은?" 유무는 무시하고 매칭).
+- 스펙이 없으면 **렌더·업로드하지 않고** 행을 `대기`로 남기며 Slack으로 알립니다. 예전(타이핑 자막/흰 배경) 디자인으로 대신 올리는 경로는 없습니다.
+- 기준 스펙: `sayeon_specs/reference/sayeon_ep067.json`, `sayeon_ep068.json`.
+- 로컬 확인: `python sayeon_render.py sayeon_specs/sayeon_ep073.json` 또는 `python make_shorts.py --dry-run --script <spec>`.
+
 ## 시트 열: `Status` vs `YouTube`
 
 | 열 | 누가 쓰나 | 값 |

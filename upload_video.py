@@ -522,6 +522,31 @@ def upload_short(video_path: str, script_path: str) -> str:
     return video_id
 
 
+def upload_spec_short(video_path: str, metadata: dict, spec: dict) -> str:
+    """EP.67 디자인 스펙 영상 업로드. 제목·설명·태그는 스펙 그대로, 썸네일은 만들지 않는다."""
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"영상 파일이 없습니다: {video_path}")
+
+    print("[1/4] YouTube 인증 중...")
+    creds = get_credentials()
+
+    print("[2/4] 채널 확인 중...")
+    verify_channel(creds)
+
+    print(f"[3/4] 업로드 중... 제목: {metadata['title']}")
+    video_id = upload_video(creds, video_path, metadata)
+
+    print("[4/4] 질문 댓글 (실패해도 업로드는 유지)...")
+    question = ""
+    for seg in spec.get("segments", []):
+        if seg.get("type") == "question":
+            question = str(seg.get("spoken") or seg.get("text", "")).replace("**", "").replace("\n", " ").strip()
+    post_pinned_style_comment(creds, video_id, f"{question or DEFAULT_QUESTION}\n댓글로 알려주세요 👇")
+
+    print(f"완료: https://youtube.com/shorts/{video_id}")
+    return video_id
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="이미 만든 Shorts mp4를 YouTube에 올립니다.")
     parser.add_argument("--video", required=True, help="output/final_rowN.mp4")
