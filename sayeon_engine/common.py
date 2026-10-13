@@ -6,7 +6,9 @@ from PIL import Image, ImageDraw, ImageFont
 W, H, FPS = 1080, 1920, 30
 SAFE = (60, 250, 900, 1400)          # x0,y0,x1,y1 Shorts safe zone for text
 SAFE_CX = (SAFE[0] + SAFE[2]) // 2   # 480
-EDGE_TTS = os.environ.get('EDGE_TTS') or shutil.which('edge-tts') or os.path.expanduser('~/.local/bin/edge-tts')
+# edge-tts 7.2.8 gets 403 (rany2/edge-tts#490); prefer the repo's patched wrapper (new host + legacy fallback).
+_FIXED_TTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tools', 'edge-tts-fixed')
+EDGE_TTS = os.environ.get('EDGE_TTS') or (_FIXED_TTS if os.path.exists(_FIXED_TTS) else None) or shutil.which('edge-tts') or os.path.expanduser('~/.local/bin/edge-tts')
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _FONT_DIRS = [os.environ.get('SAYEON_FONT_DIR', ''), os.path.join(_HERE, '..', 'fonts'), os.path.join(_HERE, '..', 'assets', 'fonts'),
               '/usr/share/fonts/truetype/sand-box/google/Gowun Batang']

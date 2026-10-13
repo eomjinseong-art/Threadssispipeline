@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+# Workaround for edge-tts 7.2.8 403 (MS moved Read Aloud to api.msedgeservices.com, 2026-10-10~). See rany2/edge-tts#490.
+import sys
+from aiohttp import WSServerHandshakeError
+import edge_tts.communicate as communicate
+from edge_tts.constants import TRUSTED_CLIENT_TOKEN, WSS_URL as LEGACY
+from edge_tts.util import main
+URLS=[f"wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1?Ocp-Apim-Subscription-Key={TRUSTED_CLIENT_TOKEN}", LEGACY]
+for i,u in enumerate(URLS):
+    communicate.WSS_URL=u
+    try:
+        main(); break
+    except WSServerHandshakeError as e:
+        if e.status!=403 or i==len(URLS)-1: raise
