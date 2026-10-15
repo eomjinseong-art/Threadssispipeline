@@ -124,6 +124,25 @@ def run(cmd):
 def duration(path):
     return float(run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', path]).strip())
 
+_OA_VOICE = {  # edge voice/pitch -> OpenAI voice + acting note
+    ('ko-KR-SunHiNeural', False): ('coral', '30대 한국 여성, 차분하지만 억울함이 살짝 묻어나는 사연 낭독 톤.'),
+    ('ko-KR-SunHiNeural', True): ('sage', '60대 한국 시어머니, 낮고 느긋한 말투, 은근히 생색내는 톤.'),
+    ('ko-KR-InJoonNeural', False): ('ash', '30대 한국 남편, 무심하고 가볍게 넘기는 말투.'),
+    ('ko-KR-HyunsuMultilingualNeural', True): ('onyx', '60대 한국 시아버지, 낮고 점잖은 말투.'),
+    ('ko-KR-HyunsuMultilingualNeural', False): ('echo', '친절하고 사무적인 한국 남성 직원 말투.'),
+}
+
+def openai_tts(text, voice, rate, pitch, mp3):
+    """OpenAI gpt-4o-mini-tts (OPENAI_API_KEY_FIXED or OPENAI_API_KEY)."""
+    from openai import OpenAI
+    low = pitch.startswith('-') and pitch not in ('-0Hz',)
+    ov, note = _OA_VOICE.get((voice, low)) or _OA_VOICE.get((voice, not low)) or ('coral', '한국어 사연 낭독.')
+    try: speed = 1.0 + int(rate.strip('%+')) / 100 if rate else 1.0
+    except ValueError: speed = 1.0
+    client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY_FIXED') or os.environ.get('OPENAI_API_KEY'))
+    r = client.audio.speech.create(model='gpt-4o-mini-tts', voice=ov, input=text, instructions=note + ' 자연스러운 한국어로.', response_format='mp3', speed=max(0.8, min(1.3, speed * 1.08)))
+    with open(mp3, 'wb') as f: f.write(r.read())
+
 def tts(text, voice, out_wav, rate='+0%', pitch='+0Hz', cache_dir=None):
     """edge-tts -> 48k mono wav, leading/trailing silence trimmed."""
     key = hashlib.md5(f'{text}|{voice}|{rate}|{pitch}'.encode()).hexdigest()[:12]
@@ -132,11 +151,17 @@ def tts(text, voice, out_wav, rate='+0%', pitch='+0Hz', cache_dir=None):
     cached = os.path.join(cache_dir, key + '.wav')
     if not os.path.exists(cached):
         mp3 = cached[:-4] + '.mp3'
+        backend = os.environ.get('TTS_BACKEND', 'edge')
         for attempt in range(3):
+            if backend == 'openai': break
             try:
                 run([EDGE_TTS, '--voice', voice, f'--rate={rate}', f'--pitch={pitch}', '--text', text, '--write-media', mp3]); break
-            except RuntimeError:
-                if attempt == 2: raise
+            except RuntimeError as e:
+                if attempt == 2:
+                    if not (os.environ.get('OPENAI_API_KEY_FIXED') or os.environ.get('OPENAI_API_KEY')): raise
+                    print(f'[tts] edge-tts failed, falling back to OpenAI gpt-4o-mini-tts: {str(e)[-200:]}'); backend = 'openai'
+        if backend == 'openai':
+            openai_tts(text, voice, rate, pitch, mp3)
         run(['ffmpeg', '-v', 'error', '-y', '-i', mp3, '-af',
              'silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse',
              '-ar', '48000', '-ac', '1', cached])
