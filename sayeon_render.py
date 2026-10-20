@@ -22,6 +22,63 @@ SPECS_DIR = os.path.join(ROOT, "sayeon_specs")
 ENGINE_DIR = os.path.join(ROOT, "sayeon_engine")
 OUTPUT_DIR = os.path.join(ROOT, "output")
 DURATION_RANGE = (45.0, 58.0)
+# refill 이 저장 전에 쓰는 여유 구간. EP.75–79 CI 타이밍 기준으로 이 추정이
+# 실제보다 최대 약 1.5초 길고, 느린 날에는 최대 약 3.5초 짧았다.
+# 49~53초로 맞추면 그 오차가 나도 렌더 허용 45~58초 안에 남는다.
+ESTIMATE_RANGE = (49.0, 53.0)
+# edge-tts ko-KR (me +9%, mil 0%/−14Hz, husband +4%, fil −2%, man2 +4%).
+# 발화 ≈ 0.05초 + 글자/cps. EP.75–79 세그먼트 중앙값.
+SPEECH_LEAD = 0.05
+VOICE_CPS = {
+    "me": 6.90,
+    "mil": 5.29,
+    "husband": 5.23,
+    "fil": 5.16,
+    "man2": 5.25,
+}
+DEFAULT_CPS = 6.2
+
+
+class DurationOutOfRange(ValueError):
+    """렌더 길이가 EP.67 창(45~58초) 밖. 대기열에서는 이 행만 보류하고 다음 편으로 간다."""
+
+    def __init__(self, total: float, lo: float = DURATION_RANGE[0], hi: float = DURATION_RANGE[1]):
+        self.total = total
+        self.lo = lo
+        self.hi = hi
+        super().__init__(
+            f"길이 {total:.1f}s 가 EP.67 기준 {lo:.0f}~{hi:.0f}s 를 벗어났습니다. 스펙을 다듬어 주세요."
+        )
+
+
+def segment_spoken(seg: dict) -> str:
+    if seg.get("spoken"):
+        return str(seg["spoken"])
+    return str(seg.get("text", "")).replace("**", "").replace("\n", " ")
+
+
+def spoken_char_count(spec: dict) -> int:
+    return sum(len(segment_spoken(g).replace(" ", "")) for g in spec.get("segments") or [])
+
+
+def estimate_segment_seconds(seg: dict) -> float:
+    """한 세그먼트의 화면 길이(발화 + pause/tail). render() 와 같은 더하기 규칙."""
+    n = len(segment_spoken(seg).replace(" ", ""))
+    cps = VOICE_CPS.get(seg.get("voice") or "me", DEFAULT_CPS)
+    speech = SPEECH_LEAD + n / cps
+    typ = seg.get("type")
+    if typ == "question":
+        return speech + float(seg.get("tail", 1.6))
+    pause = float(seg.get("pause", 0.35 if typ in ("narr", "chat") else 0.6))
+    seconds = speech + pause
+    if typ == "hook":
+        seconds = max(seconds, 2.5)
+    return seconds
+
+
+def estimate_duration(spec: dict) -> float:
+    """TTS 없이 EP.67 렌더 길이를 추정한다. 실제 길이는 render_spec 이 확정한다."""
+    return sum(estimate_segment_seconds(g) for g in spec.get("segments") or [])
 
 
 def topic_key(title: str) -> str:
@@ -99,7 +156,7 @@ def render_spec(spec: dict, outdir: str = OUTPUT_DIR) -> tuple[str, float]:
     out, total = sayeon.render(spec, outdir)
     lo, hi = DURATION_RANGE
     if not (lo <= total <= hi):
-        raise ValueError(f"길이 {total:.1f}s 가 EP.67 기준 {lo:.0f}~{hi:.0f}s 를 벗어났습니다. 스펙을 다듬어 주세요.")
+        raise DurationOutOfRange(total, lo, hi)
     return out, total
 
 

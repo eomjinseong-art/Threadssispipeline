@@ -20,12 +20,22 @@ from __future__ import annotations
 import argparse, csv, glob, json, os, re, sys
 
 from fetch_script import PENDING_STATUS, effective_youtube_status, ep_to_int, pick_youtube_pending_row
-from sayeon_render import SPECS_DIR, find_spec_for_title, topic_key, validate_spec
+from sayeon_render import (
+    ESTIMATE_RANGE,
+    SPECS_DIR,
+    estimate_duration,
+    find_spec_for_title,
+    spoken_char_count,
+    topic_key,
+    validate_spec,
+)
 from story_format import normalize_title
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 MIN_READY = int(os.environ.get("REFILL_MIN_READY", "7"))
-CHARS = (240, 300)  # 기존 EP69~74 스펙의 읽는 글자 수(공백 제외) 250~294 → 48~56초
+# 글자 수는 거친 하한. 실제 창은 estimate_duration 의 49~53초(렌더 45~58초보다 좁다).
+# EP.79(244자, 42.9초)처럼 짧은 마디가 통과하지 않게 한다.
+CHARS = (265, 330)
 BANNED = ("진성", "로빈", "대전")
 MODEL = os.environ.get("OPENAI_SPEC_MODEL", "gpt-4.1")
 
@@ -65,7 +75,7 @@ def catalog() -> dict:
 
 
 def spoken_chars(spec):
-    return sum(len((g.get("spoken") or g["text"].replace("**", "").replace("\n", " ")).replace(" ", "")) for g in spec["segments"])
+    return spoken_char_count(spec)
 
 
 def next_episode() -> int:
@@ -81,7 +91,14 @@ def check(spec: dict) -> list[str]:
         errs.append(str(e))
     n = spoken_chars(spec)
     if not CHARS[0] <= n <= CHARS[1]:
-        errs.append(f"읽는 글자 수 {n}자 (목표 {CHARS[0]}~{CHARS[1]}자, 45~58초)")
+        errs.append(f"읽는 글자 수 {n}자 (목표 {CHARS[0]}~{CHARS[1]}자)")
+    est = estimate_duration(spec)
+    lo, hi = ESTIMATE_RANGE
+    if not (lo <= est <= hi):
+        hint = "narr/chat spoken 을 한 문장씩 더 길게 쓰세요." if est < lo else "narr/chat spoken 을 줄이세요."
+        errs.append(
+            f"예상 길이 {est:.1f}s (목표 {lo:.0f}~{hi:.0f}s, 렌더 허용 45~58s). 현재 {n}자. {hint}"
+        )
     blob = json.dumps(spec, ensure_ascii=False)
     for b in BANNED:
         if b in blob:
@@ -95,11 +112,12 @@ def check(spec: dict) -> list[str]:
 SYSTEM = """당신은 유튜브 쇼츠 채널 waitmybabe 의 사연 작가입니다. 여성 1인칭 사이다 반전 사연을
 EP.67 디자인 JSON 스펙으로 씁니다. 예시 스펙 두 개와 구조·말투·길이를 똑같이 맞추세요.
 규칙:
-- segments 는 11개 안팎: hook → narr/chat 섞어 4~5개 → key(전환 "그래서 저는…") → narr/chat 2~3개 → key(결말, sub 가능) → question.
+- segments 는 11~12개: hook → narr/chat 섞어 4~5개 → key(전환 "그래서 저는…") → narr/chat 2~3개 → key(결말, sub 가능) → question.
 - chat 은 최소 2개. who/avatar/voice/group 필수. voice 는 me(주인공), mil(시어머니·엄마 세대 여성, 시누이·형님·동서도 가능), husband(남편·남자친구·시동생), fil(시아버지·어른 남성), man2(업체·제3자 남성) 중 하나.
 - hook/key/question 의 text 는 \\n 으로 3줄, **강조** 1곳. size 70~76. spoken 은 숫자·이모지 없이 한글로.
 - 숫자·영어·이모지가 들어간 narr/chat 은 spoken 에 한글로 풀어 쓰기.
-- 전체 읽는 분량(spoken 기준, 공백 제외) 250~290자. 문장은 짧게.
+- 전체 읽는 분량(spoken 기준, 공백 제외) 280~310자. narr 와 chat 의 spoken 은 각각 24자 이상.
+  짧은 마디를 여러 개 두지 말고, 상황·증거·반응이 한 문장에 들어가게 쓰세요. 예상 낭독은 49~53초입니다.
 - 실명·지명·회사명 금지. 특히 '진성', '로빈', '대전' 은 절대 쓰지 마세요.
 - title 은 반드시 주어진 topic 그대로 + " #Shorts" (topic 에 ", 결말은?" 이 없으면 붙이지 말 것).
 - description 은 예시와 같은 형식(2줄 요약 / 질문+댓글로 알려주세요 👇 / "매일 저녁, 속이 뻥 뚫리는 사이다 사연이 올라옵니다." / 창작·각색·AI 음성 표기 / 해시태그 7개 #Shorts 로 끝).
