@@ -12,6 +12,7 @@ waitmybabe Shorts는 **EP.67 '내가 차린 제사상, 시어머니 공으로?'(
 - 렌더러: `sayeon_engine/` (`sayeon_render.py`가 호출). 폰트: Noto CJK·Noto Color Emoji(apt), Gowun Batang(`assets/fonts/`).
 - 대기 행마다 **손으로 쓴 스펙** `sayeon_specs/sayeon_epNNN.json`이 필요합니다. `topic`에 시트 `제목`을 그대로 적습니다(", 결말은?" 유무는 무시하고 매칭).
 - 스펙이 없으면 **렌더·업로드하지 않고** 행을 `대기`로 남기며 Slack으로 알립니다. 예전(타이핑 자막/흰 배경) 디자인으로 대신 올리는 경로는 없습니다.
+- `refill_queue.py` 가 새 스펙을 쓸 때 낭독 길이를 49~53초로 추정해 거르고, 짧은 마디를 다시 쓰게 합니다. 렌더가 45~58초 밖이면 그 행만 `보류`입니다.
 - 기준 스펙: `sayeon_specs/reference/sayeon_ep067.json`, `sayeon_ep068.json`.
 - 로컬 확인: `python sayeon_render.py sayeon_specs/sayeon_ep073.json` 또는 `python make_shorts.py --dry-run --script <spec>`.
 
@@ -29,7 +30,7 @@ waitmybabe Shorts는 **EP.67 '내가 차린 제사상, 시어머니 공으로?'(
 - EP ≤ 42, 칸이 비어 있으면 → `완료`
 - EP ≥ 43, 칸이 비어 있으면 → `대기` → **백필은 EP.43 `내 결혼을 반대하는 절친`부터**
 
-이미 값이 있는 칸은 덮어쓰지 않습니다. 업로드가 **성공한 뒤에만** `YouTube=완료`. 실패하면 `대기`로 남아 다음 스케줄이 같은 EP를 재시도합니다.
+이미 값이 있는 칸은 덮어쓰지 않습니다. 업로드가 **성공한 뒤에만** `YouTube=완료`. 업로드 실패는 `대기`로 남아 다음 스케줄이 재시도합니다. 렌더 길이가 45~58초를 벗어나면 그 행만 `YouTube=보류`로 표시하고 다음 대기 행으로 넘어갑니다. 한 편의 짧은 스펙이 이후 업로드를 막지 않습니다. 스펙을 고친 뒤 `보류`를 `대기`로 되돌리면 다시 올라갑니다.
 
 채널 ID: `UCbMITZoZxPQrmKsZdbwUB7g` (`EXPECTED_YOUTUBE_CHANNEL_ID`). 불일치면 업로드를 중단합니다.
 

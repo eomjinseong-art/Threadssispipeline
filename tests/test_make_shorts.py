@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from make_shorts import run
+from sayeon_render import DurationOutOfRange
 
 SPEC = {
     "channel": "sayeon",
@@ -92,6 +93,92 @@ class MakeShortsOrchestratorTests(unittest.TestCase):
             os.unlink(f.name)
         upload.assert_not_called()
         mark.assert_not_called()
+
+    @patch("make_shorts.mark_youtube_hold")
+    @patch("make_shorts.notify_failure")
+    @patch("make_shorts.mark_youtube_complete")
+    @patch("make_shorts.upload_spec_short", return_value="vid999")
+    @patch(
+        "make_shorts.render_spec",
+        side_effect=[DurationOutOfRange(42.9), ("output/y.mp4", 50.0)],
+    )
+    @patch(
+        "make_shorts.find_spec_for_title",
+        side_effect=[
+            ("sayeon_specs/sayeon_ep079.json", SPEC),
+            ("sayeon_specs/sayeon_ep080.json", {**SPEC, "title": "다음 사연 #Shorts"}),
+        ],
+    )
+    @patch(
+        "make_shorts.find_pending_row",
+        side_effect=[
+            (162, {"제목": "시어머니 전용 카드키를 달라는 남편, 결말은?"}),
+            (163, {"제목": "다음 사연"}),
+        ],
+    )
+    @patch("make_shorts.load_worksheet")
+    @patch("make_shorts.already_posted_short_today", return_value=False)
+    def test_short_spec_is_held_and_next_row_uploads(
+        self, _posted, load_ws, _pick, _find, _render, upload, mark, notify, hold
+    ):
+        ws = MagicMock()
+        load_ws.return_value = ws
+        self.assertEqual(run(), 0)
+        hold.assert_called_once_with(ws, 162)
+        notify.assert_called_once()
+        upload.assert_called_once()
+        self.assertEqual(upload.call_args[0][1]["title"], "다음 사연 #Shorts")
+        mark.assert_called_once_with(ws, 163)
+
+    @patch("make_shorts.mark_youtube_hold")
+    @patch("make_shorts.notify_failure")
+    @patch("make_shorts.mark_youtube_complete")
+    @patch("make_shorts.upload_spec_short")
+    @patch("make_shorts.render_spec", side_effect=DurationOutOfRange(42.9))
+    @patch("make_shorts.find_spec_for_title", return_value=("sayeon_specs/x.json", SPEC))
+    @patch("make_shorts.find_pending_row", return_value=(162, {"제목": "짧은 사연"}))
+    @patch("make_shorts.load_worksheet")
+    @patch("make_shorts.already_posted_short_today", return_value=False)
+    def test_hold_does_not_retry_the_same_row_forever(
+        self, _posted, load_ws, _pick, _find, _render, upload, mark, _notify, hold
+    ):
+        load_ws.return_value = MagicMock()
+        self.assertEqual(run(), 1)
+        self.assertEqual(hold.call_count, 1)
+        upload.assert_not_called()
+        mark.assert_not_called()
+
+    @patch("make_shorts.mark_youtube_hold")
+    @patch("make_shorts.notify_failure")
+    @patch("make_shorts.mark_youtube_complete")
+    @patch("make_shorts.upload_spec_short")
+    @patch("make_shorts.render_spec", side_effect=DurationOutOfRange(40.0))
+    @patch("make_shorts.find_spec_for_title", return_value=("sayeon_specs/x.json", SPEC))
+    @patch(
+        "make_shorts.find_pending_row",
+        side_effect=[(i, {"제목": f"짧은 {i}"}) for i in range(2, 9)],
+    )
+    @patch("make_shorts.load_worksheet")
+    @patch("make_shorts.already_posted_short_today", return_value=False)
+    def test_stops_after_five_short_specs(self, _posted, load_ws, _pick, _find, _render, upload, mark, _notify, hold):
+        load_ws.return_value = MagicMock()
+        self.assertEqual(run(), 1)
+        self.assertEqual(hold.call_count, 5)
+        upload.assert_not_called()
+        mark.assert_not_called()
+
+    @patch("make_shorts.mark_youtube_hold")
+    @patch("make_shorts.notify_failure")
+    @patch("make_shorts.render_spec", side_effect=DurationOutOfRange(42.9))
+    @patch("make_shorts.find_spec_for_title", return_value=("sayeon_specs/x.json", SPEC))
+    @patch("make_shorts.find_pending_row", return_value=(162, {"제목": "짧은 사연"}))
+    @patch("make_shorts.load_worksheet")
+    @patch("make_shorts.already_posted_short_today", return_value=False)
+    def test_dry_run_does_not_hold_a_short_spec(self, _posted, load_ws, _pick, _find, _render, _notify, hold):
+        load_ws.return_value = MagicMock()
+        with self.assertRaises(DurationOutOfRange):
+            run(dry_run=True)
+        hold.assert_not_called()
 
 
 if __name__ == "__main__":

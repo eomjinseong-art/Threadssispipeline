@@ -46,6 +46,9 @@ REQUIRED_COLUMNS = ["Status", "EP", "제목", "사연", "현실언니", "공감�
 SHORTS_REQUIRED = ["EP", "제목", "사연"]
 PENDING_STATUS = "대기"
 COMPLETE_STATUS = "완료"
+# 렌더 길이가 45~58초 밖인 스펙. 대기에서 빼서 다음 편이 올라가게 한다.
+# 스펙을 고친 뒤 이 칸을 다시 대기로 되돌리면 재시도한다.
+YOUTUBE_HOLD_STATUS = "보류"
 YOUTUBE_COLUMN = "YouTube"
 # Studio 기준 2026-09-14: waitmybabe 에 EP.1–EP.42 업로드됨. 백필은 43부터.
 YOUTUBE_SEEDED_COMPLETE_THROUGH_EP = 42
@@ -290,14 +293,31 @@ def fetch_pending_script(ws: gspread.Worksheet | None = None) -> tuple[int | Non
     return row_index, script, path
 
 
+def mark_youtube_status(ws: gspread.Worksheet, row_index: int, status: str, color: dict | None = None) -> None:
+    """YouTube 열만 바꾼다. Threads Status는 건드리지 않는다."""
+    col = ensure_youtube_column(ws)
+    ws.update_cell(row_index, col, status)
+    if color:
+        ws.format(gspread.utils.rowcol_to_a1(row_index, col), {"backgroundColor": color})
+
+
 def mark_youtube_complete(ws: gspread.Worksheet, row_index: int) -> None:
     """YouTube 열만 완료로 표시한다. Threads Status는 건드리지 않는다."""
-    col = ensure_youtube_column(ws)
-    ws.update_cell(row_index, col, COMPLETE_STATUS)
-    col_a1 = gspread.utils.rowcol_to_a1(row_index, col)
-    ws.format(
-        col_a1,
-        {"backgroundColor": {"red": 0.71, "green": 0.84, "blue": 0.66}},
+    mark_youtube_status(
+        ws,
+        row_index,
+        COMPLETE_STATUS,
+        {"red": 0.71, "green": 0.84, "blue": 0.66},
+    )
+
+
+def mark_youtube_hold(ws: gspread.Worksheet, row_index: int) -> None:
+    """길이 범위 밖 스펙. 대기에서 빼 다음 스케줄이 같은 행에 막히지 않게 한다."""
+    mark_youtube_status(
+        ws,
+        row_index,
+        YOUTUBE_HOLD_STATUS,
+        {"red": 0.98, "green": 0.85, "blue": 0.55},
     )
 
 
