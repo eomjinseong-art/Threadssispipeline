@@ -52,6 +52,23 @@ class SayeonSpecTests(unittest.TestCase):
             est = estimate_duration(by_ep[ep])
             self.assertLess(abs(est - actual), 3.6, f"EP.{ep} est {est:.2f} actual {actual}")
 
+    def test_ep80_next_upload_estimates_inside_render_window(self):
+        """2026-10-21 run started EP.80 and stopped on a TTS 429, before the length check."""
+        by_ep = {spec["episode"]: spec for _path, spec in load_specs()}
+        est = estimate_duration(by_ep[80])
+        self.assertGreaterEqual(est, 45.0, est)
+        self.assertLessEqual(est, 58.0, est)
+        self.assertGreaterEqual(est, ESTIMATE_RANGE[0], est)
+        self.assertLessEqual(est, ESTIMATE_RANGE[1], est)
+
+    def test_ep79_estimate_stays_inside_window(self):
+        """EP.79 uploaded on 2026-10-20. 42.9s is the pre-fix render, kept only as a test double."""
+        by_ep = {spec["episode"]: spec for _path, spec in load_specs()}
+        est = estimate_duration(by_ep[79])
+        self.assertGreaterEqual(est, ESTIMATE_RANGE[0], est)
+        self.assertLessEqual(est, ESTIMATE_RANGE[1], est)
+        self.assertNotAlmostEqual(est, 42.9, delta=1.0)
+
     def test_pending_specs_estimate_inside_generation_window(self):
         lo, hi = ESTIMATE_RANGE
         pending = [spec for _path, spec in load_specs() if spec["episode"] >= 79]

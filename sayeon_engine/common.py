@@ -1,5 +1,5 @@
 """Shared helpers: TTS (edge-tts), text rendering w/ emoji, timeline -> mp4, original BGM synth."""
-import asyncio, json, os, re, subprocess, math, wave, hashlib, shutil
+import asyncio, json, os, re, subprocess, math, wave, hashlib, shutil, time
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
@@ -143,8 +143,66 @@ def openai_tts(text, voice, rate, pitch, mp3):
     r = client.audio.speech.create(model='gpt-4o-mini-tts', voice=ov, input=text, instructions=note + ' 자연스러운 한국어로.', response_format='mp3', speed=max(0.8, min(1.3, speed * 1.08)))
     with open(mp3, 'wb') as f: f.write(r.read())
 
+# 2026-10-21 daily run: api.msedgeservices.com answered 429 mid-render.
+# Immediate retries hit the same limit. Sleep between attempts, then stop
+# calling edge-tts for the rest of this process.
+TTS_RATE_LIMIT_DELAYS = (2, 4, 8, 16, 32)
+_edge_rate_limited = False
+
+
+def tts_error_is_rate_limit(err: BaseException) -> bool:
+    """True for edge-tts websocket 429/503. Ignores a 429 that only appears in the spoken text."""
+    text = str(err)
+    if "Too Many Requests" in text:
+        return True
+    if "WSServerHandshakeError" not in text and "Invalid response status" not in text:
+        return False
+    return bool(re.search(r"\b(429|503)\b", text))
+
+
+def _openai_tts_key() -> str:
+    return os.environ.get("OPENAI_API_KEY_FIXED") or os.environ.get("OPENAI_API_KEY") or ""
+
+
+def run_tts_command(cmd, *, sleep=None, rate_delays=TTS_RATE_LIMIT_DELAYS):
+    """Run one edge-tts CLI call.
+
+    Other errors are retried twice immediately (three tries total).
+    429/503 sleeps through `rate_delays` (seconds) before the last failure is raised.
+    """
+    if sleep is None:
+        sleep = time.sleep
+    other_failures = 0
+    rate_failures = 0
+    while True:
+        try:
+            return run(cmd)
+        except RuntimeError as exc:
+            if tts_error_is_rate_limit(exc):
+                if rate_failures >= len(rate_delays):
+                    raise
+                delay = rate_delays[rate_failures]
+                rate_failures += 1
+                print(
+                    f"[tts] rate limited (429/503), retry in {delay:.0f}s "
+                    f"({rate_failures}/{len(rate_delays)})"
+                )
+                sleep(delay)
+                continue
+            other_failures += 1
+            if other_failures >= 3:
+                raise
+            print("[tts] edge-tts failed, retrying")
+
+
 def tts(text, voice, out_wav, rate='+0%', pitch='+0Hz', cache_dir=None):
-    """edge-tts -> 48k mono wav, leading/trailing silence trimmed."""
+    """edge-tts -> 48k mono wav, leading/trailing silence trimmed.
+
+    A 429/503 backs off inside run_tts_command. If the budget is used up and an
+    OpenAI key is set, this segment and later ones in the same process use
+    gpt-4o-mini-tts instead of hammering the websocket again.
+    """
+    global _edge_rate_limited
     key = hashlib.md5(f'{text}|{voice}|{rate}|{pitch}'.encode()).hexdigest()[:12]
     cache_dir = cache_dir or os.path.join(os.path.dirname(out_wav), '_ttscache')
     os.makedirs(cache_dir, exist_ok=True)
@@ -152,14 +210,18 @@ def tts(text, voice, out_wav, rate='+0%', pitch='+0Hz', cache_dir=None):
     if not os.path.exists(cached):
         mp3 = cached[:-4] + '.mp3'
         backend = os.environ.get('TTS_BACKEND', 'edge')
-        for attempt in range(3):
-            if backend == 'openai': break
+        if backend != 'openai' and _edge_rate_limited:
+            backend = 'openai'
+        if backend != 'openai':
             try:
-                run([EDGE_TTS, '--voice', voice, f'--rate={rate}', f'--pitch={pitch}', '--text', text, '--write-media', mp3]); break
-            except RuntimeError as e:
-                if attempt == 2:
-                    if not (os.environ.get('OPENAI_API_KEY_FIXED') or os.environ.get('OPENAI_API_KEY')): raise
-                    print(f'[tts] edge-tts failed, falling back to OpenAI gpt-4o-mini-tts: {str(e)[-200:]}'); backend = 'openai'
+                run_tts_command([EDGE_TTS, '--voice', voice, f'--rate={rate}', f'--pitch={pitch}', '--text', text, '--write-media', mp3])
+            except RuntimeError as exc:
+                if tts_error_is_rate_limit(exc):
+                    _edge_rate_limited = True
+                if not _openai_tts_key():
+                    raise
+                print('[tts] edge-tts failed, falling back to OpenAI gpt-4o-mini-tts')
+                backend = 'openai'
         if backend == 'openai':
             openai_tts(text, voice, rate, pitch, mp3)
         run(['ffmpeg', '-v', 'error', '-y', '-i', mp3, '-af',

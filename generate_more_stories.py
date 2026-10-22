@@ -277,15 +277,22 @@ def refill_specs() -> None:
     here = os.path.dirname(os.path.abspath(__file__))
     rc = subprocess.run([sys.executable, os.path.join(here, "refill_queue.py")], env={**os.environ, "REFILL_NESTED": "1"}).returncode
     print(f"[refill_queue] 종료 코드 {rc}")
-    if rc == 0 and os.environ.get("GITHUB_ACTIONS") == "true":
-        # 새 스펙을 레포에 남긴다(권한이 없으면 조용히 넘어가고, 다음 실행이 다시 만든다).
-        cmds = [["git", "config", "user.name", "github-actions[bot]"],
-                ["git", "config", "user.email", "41898283+github-actions[bot]@users.noreply.github.com"],
-                ["git", "add", "sayeon_specs"], ["git", "commit", "-m", "chore: refill EP.67 specs"], ["git", "push"]]
-        if subprocess.run(["git", "status", "--porcelain", "sayeon_specs"], cwd=here, capture_output=True, text=True).stdout.strip():
-            for c in cmds:
-                if subprocess.run(c, cwd=here).returncode != 0:
-                    print("[refill_queue] 스펙 커밋/푸시 실패(권한). 이번 실행에서는 로컬 스펙으로 렌더합니다."); break
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    # 검증을 통과해 디스크에 있는 스펙만 커밋한다. 뒤 제목이 실패(rc!=0)해도
+    # 이미 저장된 편은 다음 실행이 다시 만들지 않게 남긴다.
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain", "sayeon_specs"], cwd=here, capture_output=True, text=True
+    ).stdout.strip()
+    if not dirty:
+        return
+    cmds = [["git", "config", "user.name", "github-actions[bot]"],
+            ["git", "config", "user.email", "41898283+github-actions[bot]@users.noreply.github.com"],
+            ["git", "add", "sayeon_specs"], ["git", "commit", "-m", "chore: refill EP.67 specs"], ["git", "push"]]
+    for c in cmds:
+        if subprocess.run(c, cwd=here).returncode != 0:
+            print("[refill_queue] 스펙 커밋/푸시 실패(권한). 이번 실행에서는 로컬 스펙으로 렌더합니다.")
+            break
 
 
 if __name__ == "__main__":
