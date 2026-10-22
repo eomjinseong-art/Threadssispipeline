@@ -17,7 +17,7 @@ generate_more_stories.py 로 시트 행을 먼저 보충한다(시트 자격증�
 """
 from __future__ import annotations
 
-import argparse, csv, glob, json, os, re, sys
+import argparse, copy, csv, glob, json, os, re, sys
 
 from fetch_script import PENDING_STATUS, effective_youtube_status, ep_to_int, pick_youtube_pending_row
 from sayeon_render import (
@@ -25,8 +25,8 @@ from sayeon_render import (
     SPECS_DIR,
     estimate_duration,
     find_spec_for_title,
+    segment_spoken,
     spoken_char_count,
-    topic_key,
     validate_spec,
 )
 from story_format import normalize_title
@@ -118,12 +118,204 @@ EP.67 디자인 JSON 스펙으로 씁니다. 예시 스펙 두 개와 구조·�
 - 숫자·영어·이모지가 들어간 narr/chat 은 spoken 에 한글로 풀어 쓰기.
 - 전체 읽는 분량(spoken 기준, 공백 제외) 280~310자. narr 와 chat 의 spoken 은 각각 24자 이상.
   짧은 마디를 여러 개 두지 말고, 상황·증거·반응이 한 문장에 들어가게 쓰세요. 예상 낭독은 49~53초입니다.
+  길이 수정을 요청받으면 장면을 새로 쓰지 말고, spoken 만 요청한 글자 수만큼 조절하세요. 한 번에 40자 넘게 늘리거나 줄이지 마세요.
 - 실명·지명·회사명 금지. 특히 '진성', '로빈', '대전' 은 절대 쓰지 마세요.
 - title 은 반드시 주어진 topic 그대로 + " #Shorts" (topic 에 ", 결말은?" 이 없으면 붙이지 말 것).
 - description 은 예시와 같은 형식(2줄 요약 / 질문+댓글로 알려주세요 👇 / "매일 저녁, 속이 뻥 뚫리는 사이다 사연이 올라옵니다." / 창작·각색·AI 음성 표기 / 해시태그 7개 #Shorts 로 끝).
 - tags 12개 내외, "사연","사이다사연","사이다" 로 시작, "shorts","쇼츠" 로 끝.
 - disclosure 는 "※ 본 사연은 창작·각색된 이야기이며, AI 음성으로 제작되었습니다."
 JSON 객체 하나만 출력."""
+
+
+# 로컬 보정으로 메울 수 있는 최대 차이. 그보다 크면 모델이 다시 쓴다.
+_MAX_SEC_GAP = 8.0
+_MAX_CHAR_GAP = 70
+_MAX_ADJUST_STEPS = 8
+# 공백 제외 글자 수가 짧은 순. 너무 긴 덧붙임은 53초를 넘기므로 짧은 것부터 시도한다.
+_PADS = (
+    "그날도 같았어요.",
+    "그 말이 남았어요.",
+    "그 말이 오래 남았어요.",
+    "그날 일이 쉽게 잊히지 않았어요.",
+    "그 한마디가 한참 동안 마음에 남았어요.",
+)
+
+
+def _plain_chars(text: str) -> int:
+    return len(re.sub(r"\s+", "", text))
+
+
+def _is_length_error(err: str) -> bool:
+    return err.startswith("읽는 글자 수") or err.startswith("예상 길이")
+
+
+def _gap(spec: dict) -> tuple[int, float, bool, bool]:
+    n = spoken_chars(spec)
+    est = estimate_duration(spec)
+    long = est > ESTIMATE_RANGE[1] or n > CHARS[1]
+    short = est < ESTIMATE_RANGE[0] or n < CHARS[0]
+    return n, est, long, short
+
+
+def _length_side(chars: int, seconds: float) -> int:
+    if seconds > ESTIMATE_RANGE[1] or chars > CHARS[1]:
+        return 1
+    if seconds < ESTIMATE_RANGE[0] or chars < CHARS[0]:
+        return -1
+    return 0
+
+
+def _capture_segment(seg: dict) -> tuple[bool, str | None, str | None]:
+    return ("spoken" in seg, seg.get("spoken"), seg.get("text"))
+
+
+def _restore_segment(seg: dict, saved: tuple[bool, str | None, str | None]) -> None:
+    had_spoken, spoken, text = saved
+    if had_spoken:
+        seg["spoken"] = spoken
+    else:
+        seg.pop("spoken", None)
+    if text is None:
+        seg.pop("text", None)
+    else:
+        seg["text"] = text
+
+
+def _apply_spoken(seg: dict, new_spoken: str) -> None:
+    """spoken 을 바꾼다. 화면 글과 낭독이 같았으면 화면 글도 같이 맞춘다."""
+    old = segment_spoken(seg)
+    text = str(seg.get("text") or "")
+    plain = re.sub(r"\s+", " ", text.replace("**", "").replace("\n", " ")).strip()
+    old_norm = re.sub(r"\s+", " ", old).strip()
+    seg["spoken"] = new_spoken
+    if plain == old_norm and "\n" not in text and "**" not in text:
+        seg["text"] = new_spoken
+
+
+def _trim_text(spoken: str) -> str | None:
+    """마지막 문장이나 쉼표 절을 하나 뺀다. 너무 짧아지면 None."""
+    spoken = spoken.strip()
+    sents = [s.strip() for s in re.findall(r"[^.!?…]+[.!?…]+", spoken) if s.strip()]
+    if len(sents) >= 2 and _plain_chars(sents[-1]) >= 6 and _plain_chars("".join(sents[:-1])) >= 12:
+        return " ".join(sents[:-1]).strip()
+    head = re.sub(r"[,，]\s*[^,，]+$", "", spoken).strip()
+    if head and head != spoken and _plain_chars(head) >= 12 and _plain_chars(spoken) - _plain_chars(head) >= 8:
+        if head[-1:] not in ".?!…":
+            head += "."
+        return head
+    return None
+
+
+def _narr_or_chat(spec: dict) -> list[dict]:
+    narr = [g for g in spec.get("segments") or [] if g.get("type") == "narr"]
+    chat = [g for g in spec.get("segments") or [] if g.get("type") == "chat"]
+    return narr + chat
+
+
+def _trim_once(spec: dict) -> bool:
+    segs = sorted(_narr_or_chat(spec), key=lambda g: _plain_chars(segment_spoken(g)), reverse=True)
+    for seg in segs:
+        new = _trim_text(segment_spoken(seg))
+        if not new:
+            continue
+        saved = _capture_segment(seg)
+        _apply_spoken(seg, new)
+        _n, _est, long, short = _gap(spec)
+        if short and not long:
+            _restore_segment(seg, saved)
+            continue
+        return True
+    return False
+
+
+def _pad_once(spec: dict) -> bool:
+    segs = [g for g in spec.get("segments") or [] if g.get("type") == "narr"]
+    if not segs:
+        segs = [g for g in spec.get("segments") or [] if g.get("type") == "chat"]
+    if not segs:
+        return False
+    fresh = [g for g in segs if not any(segment_spoken(g).rstrip().endswith(pad) for pad in _PADS)]
+    pool = fresh or segs
+    seg = max(pool, key=lambda g: _plain_chars(segment_spoken(g)))
+    base = segment_spoken(seg).rstrip()
+    saved = _capture_segment(seg)
+    progressed = None
+    for pad in sorted(_PADS, key=_plain_chars):
+        _apply_spoken(seg, f"{base} {pad}".strip())
+        _n, _est, long, short = _gap(spec)
+        if not long and not short:
+            return True
+        if short and not long:
+            progressed = _capture_segment(seg)
+            continue
+        break
+    if progressed is not None:
+        _restore_segment(seg, progressed)
+        return True
+    _restore_segment(seg, saved)
+    return False
+
+
+def adjust_spec_to_window(spec: dict) -> dict | None:
+    """길이만 조금 벗어난 스펙을 narr/chat spoken 보정으로 49~53초에 맞춘다.
+
+    구조 오류가 있거나 차이가 크면 None. 인자로 받은 스펙은 바꾸지 않는다.
+    """
+    spec = copy.deepcopy(spec)
+    errs = check(spec)
+    if not errs:
+        return spec
+    if any(not _is_length_error(e) for e in errs):
+        return None
+    n, est, long, short = _gap(spec)
+    if long and short:
+        return None
+    if est < ESTIMATE_RANGE[0] - _MAX_SEC_GAP or est > ESTIMATE_RANGE[1] + _MAX_SEC_GAP:
+        return None
+    if n < CHARS[0] - _MAX_CHAR_GAP or n > CHARS[1] + _MAX_CHAR_GAP:
+        return None
+    for _ in range(_MAX_ADJUST_STEPS):
+        if not check(spec):
+            return spec
+        _n, _est, long, short = _gap(spec)
+        if long and short:
+            return None
+        if long:
+            if not _trim_once(spec):
+                return None
+        elif short:
+            if not _pad_once(spec):
+                return None
+        else:
+            return spec
+    return spec if not check(spec) else None
+
+
+def length_retry_message(history: list[tuple[int, float]], errs: list[str]) -> str:
+    """재생성 프롬프트. 직전과 이번이 창의 반대쪽이면 중간 글자 수를 지정한다."""
+    n, est = history[-1]
+    parts = [
+        "다음을 고쳐 JSON 전체를 다시 주세요.",
+        "플롯과 세그먼트 수는 유지하고 narr/chat 의 spoken 만 조정하세요.",
+        "; ".join(errs),
+    ]
+    if any(_is_length_error(e) for e in errs):
+        target_n = (CHARS[0] + CHARS[1]) // 2
+        target_s = (ESTIMATE_RANGE[0] + ESTIMATE_RANGE[1]) / 2
+        if len(history) >= 2:
+            prev_n, prev_est = history[-2]
+            if _length_side(prev_n, prev_est) * _length_side(n, est) < 0:
+                target_n = (prev_n + n) // 2
+                parts.append(
+                    f"직전 {prev_n}자/{prev_est:.1f}초와 이번 {n}자/{est:.1f}초가 반대쪽입니다. "
+                    f"장면을 새로 쓰지 말고 그 중간인 약 {target_n}자에 맞추세요."
+                )
+        delta = target_n - n
+        verb = "늘려" if delta >= 0 else "줄여"
+        parts.append(
+            f"목표 약 {target_n}자, {target_s:.0f}초. 지금은 {n}자, {est:.1f}초이니 약 {abs(delta)}자만 {verb} 주세요."
+        )
+    return " ".join(parts)
 
 
 def write_spec(client, row: dict, cat: dict | None, ep: int, refs: list[dict]) -> dict:
@@ -137,8 +329,12 @@ def write_spec(client, row: dict, cat: dict | None, ep: int, refs: list[dict]) -
             f"slug 는 \"waitmybabe_EP{ep}_<핵심 단어 2~5글자>\".\n{src}")
     msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
     last = []
-    for attempt in range(4):
-        r = client.chat.completions.create(model=MODEL, temperature=0.7, response_format={"type": "json_object"}, messages=msgs)
+    history: list[tuple[int, float]] = []
+    for attempt in range(6):
+        temperature = 0.7 if attempt == 0 else 0.2
+        r = client.chat.completions.create(
+            model=MODEL, temperature=temperature, response_format={"type": "json_object"}, messages=msgs
+        )
         raw = r.choices[0].message.content
         spec = json.loads(raw)
         spec.update(channel="sayeon", episode=ep, topic=title, label=f"오늘의 사연 · EP.{ep}")
@@ -148,8 +344,16 @@ def write_spec(client, row: dict, cat: dict | None, ep: int, refs: list[dict]) -
         last = check(spec)
         if not last:
             return spec
+        fitted = adjust_spec_to_window(spec)
+        if fitted is not None and not check(fitted):
+            print(f"    길이 보정: {spoken_chars(fitted)}자, 예상 {estimate_duration(fitted):.1f}s")
+            return fitted
+        history.append((spoken_chars(spec), estimate_duration(spec)))
         print(f"    재시도 {attempt+1}: {last}")
-        msgs += [{"role": "assistant", "content": raw}, {"role": "user", "content": "다음을 고쳐 JSON 전체를 다시 주세요: " + "; ".join(last)}]
+        msgs += [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": length_retry_message(history, last)},
+        ]
     raise RuntimeError(f"{title}: 스펙 검증 실패 {last}")
 
 

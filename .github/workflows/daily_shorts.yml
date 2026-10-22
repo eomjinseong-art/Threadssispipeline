@@ -35,7 +35,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: 단위 테스트
-        run: python -m unittest discover -s tests
+        # -b 는 통과한 테스트 stdout 을 숨긴다. make_shorts 테스트가 모의 행
+        # '짧은 2' 보류 로그를 찍는데, 버퍼 없으면 실제 시트 처리로 보인다.
+        run: python -m unittest discover -s tests -b
 
       - name: "신규 반전 사연을 시트 끝에 추가 (기존 행 유지, 중복 제목은 건너뜀)"
         continue-on-error: true
@@ -60,6 +62,8 @@ jobs:
           YOUTUBE_CLIENT_SECRET_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRET_JSON }}
           EXPECTED_YOUTUBE_CHANNEL_ID: ${{ secrets.EXPECTED_YOUTUBE_CHANNEL_ID }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # 429 백오프를 다 써도 이 키로 OpenAI TTS 에 넘긴다. 키 값은 바꾸지 않는다.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python make_shorts.py
 
       - name: 렌더된 mp4 아티팩트 업로드
