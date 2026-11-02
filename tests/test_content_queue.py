@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +14,9 @@ from content_queue import (
     MIN_PENDING,
     QUEUE_PATH,
     ROOT,
+    SHORTS_PER_DAY,
     STATE_PATH,
+    THREADS_PER_DAY,
     choose_to_append,
     format_inventory,
     inventory,
@@ -25,16 +28,28 @@ from content_queue import (
 )
 from sayeon_render import find_spec_for_title
 
+# Example runway kept in the doc. The schedule commits consumed ids into
+# state.json and does not rewrite this line, so it is not the live count.
+_PUBLISHED_RUNWAY = "Threads 남은 항목: 95 (31.67일) / Shorts 남은 항목: 95 (95.00일)"
+_STALE_EMPTY_RUNWAY = "Threads 남은 항목: 108 (36.00일) / Shorts 남은 항목: 108 (108.00일)"
+_RUNWAY_LINE = re.compile(
+    r"Threads 남은 항목: (\d+) \(([0-9.]+)일\) / Shorts 남은 항목: (\d+) \(([0-9.]+)일\)"
+)
+
 
 class ContentQueueTests(unittest.TestCase):
     def test_committed_items_match_specs_and_doc_runway(self):
         items = load_queue(QUEUE_PATH)
         state = load_state(STATE_PATH)
         self.assertGreaterEqual(len(items), 1)
-        self.assertEqual(state["consumed_ids"], [])
         ids = [item["id"] for item in items]
         self.assertEqual(ids, sorted(ids))
         self.assertEqual(len(ids), len(set(ids)))
+        # The first consume commits state.json only. consumed_ids is then
+        # non-empty, and a later consume must not fail this check.
+        consumed = state["consumed_ids"]
+        self.assertEqual(consumed, sorted(set(consumed)))
+        self.assertTrue(set(consumed).issubset(ids))
         for item in items:
             path, spec = find_spec_for_title(item["title"])
             self.assertIsNotNone(spec, item["id"])
@@ -45,11 +60,52 @@ class ContentQueueTests(unittest.TestCase):
             self.assertEqual(item["story_lines"], built["story_lines"])
             self.assertTrue(item["question"].endswith("?") or "까요" in item["question"])
         inv = inventory(items, state, ROOT)
+        self.assertEqual(inv["threads_left"], len(ids) - len(consumed))
+        self.assertEqual(inv["shorts_left"], inv["threads_left"])
+        self.assertEqual(inv["threads_days"], inv["threads_left"] / THREADS_PER_DAY)
+        self.assertEqual(inv["shorts_days"], inv["shorts_left"] / SHORTS_PER_DAY)
+        self.assertGreaterEqual(inv["shorts_days"], inv["threads_days"])
+        if inv["shorts_left"]:
+            self.assertGreater(inv["shorts_days"], inv["threads_days"])
         doc = (ROOT / "docs" / "CONTENT_QUEUE.md").read_text(encoding="utf-8")
-        line = format_inventory(inv)
-        self.assertIn(line, doc)
         self.assertIn(EMPTY_LOG, doc)
-        self.assertGreater(inv["shorts_days"], inv["threads_days"])
+        self.assertNotIn("consumed_ids`가 비어 있음", doc)
+        self.assertNotIn(_STALE_EMPTY_RUNWAY, doc)
+        self.assertIn(_PUBLISHED_RUNWAY, doc)
+        self.assertEqual(
+            _PUBLISHED_RUNWAY,
+            format_inventory(
+                {
+                    "threads_left": 95,
+                    "threads_days": 95 / THREADS_PER_DAY,
+                    "shorts_left": 95,
+                    "shorts_days": 95 / SHORTS_PER_DAY,
+                }
+            ),
+        )
+        examples = _RUNWAY_LINE.findall(doc)
+        self.assertTrue(examples)
+        for threads_left, threads_days, shorts_left, shorts_days in examples:
+            left_t = int(threads_left)
+            left_s = int(shorts_left)
+            rendered = format_inventory(
+                {
+                    "threads_left": left_t,
+                    "threads_days": left_t / THREADS_PER_DAY,
+                    "shorts_left": left_s,
+                    "shorts_days": left_s / SHORTS_PER_DAY,
+                }
+            )
+            self.assertIn(rendered, doc)
+            self.assertEqual(threads_days, f"{left_t / THREADS_PER_DAY:.2f}")
+            self.assertEqual(shorts_days, f"{left_s / SHORTS_PER_DAY:.2f}")
+        # Live runway follows state.json. Requiring that line in the doc is
+        # what failed the shorts unit-test step after the first consume commit.
+        if len(consumed) < len(ids):
+            nxt = next(item["id"] for item in items if item["id"] not in set(consumed))
+            future = {"consumed_ids": sorted(set(consumed) | {nxt})}
+            future_line = format_inventory(inventory(items, future, ROOT))
+            self.assertNotEqual(future_line, format_inventory(inv))
 
     def test_empty_queue_skips_without_touching_a_sheet(self):
         with tempfile.TemporaryDirectory() as tmp:

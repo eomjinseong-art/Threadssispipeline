@@ -12,8 +12,8 @@
 
 | 경로 | 역할 |
 | --- | --- |
-| `content_queue/queue.json` | 아직 시트에 넘기지 않을 사연. 각 항목이 Threads 글과 Shorts 스펙 경로를 가집니다. |
-| `content_queue/state.json` | 이미 소비한 항목 id. `consumed_ids` 배열. |
+| `content_queue/queue.json` | 커밋된 사연 전체. 이미 소비한 항목도 남겨 두고, 각 항목이 Threads 글과 Shorts 스펙 경로를 가집니다. |
+| `content_queue/state.json` | 이미 소비한 항목 id. `consumed_ids` 배열. 스케줄은 이 파일만 커밋합니다. |
 | `sayeon_specs/sayeon_epNNN.json` | Shorts 렌더 스펙. `topic`이 시트 `제목`과 맞아야 `make_shorts.py`가 찾습니다. `reference/`는 예시이며 큐에 넣지 않습니다. |
 
 시트 행이 있어야 게시가 됩니다. 큐 파일만 있고 시트에 없으면 그 회차에는 올라가지 않고, 반대로 스펙 파일만 있고 큐 항목이 없으면 새 행을 만들지 않습니다.
@@ -64,7 +64,7 @@
 }
 ```
 
-`state.json`:
+`state.json` 형태. 소비가 없으면 배열이 비어 있습니다. 스케줄이 시트에 넘긴 id는 여기에 쌓이고, 그 배열이 비어 있지 않아도 큐는 유효합니다.
 
 ```json
 {
@@ -108,13 +108,23 @@ Shorts 일수  = 남은 항목 / 1
 
 이 수는 저장소 큐만 셉니다. 시트에 이미 `대기`인 행은 포함하지 않습니다. id가 `consumed_ids`에 들어가면, 아직 게시 전이라도 시트에 넘어간 것으로 보고 이 수에서 빠집니다.
 
-지금 커밋 기준 (`consumed_ids`가 비어 있음):
+`python consume_content_queue.py --report`는 이 수를 `format_inventory`와 같은 한 줄로 출력합니다. 일수는 소수점 둘째 자리입니다.
 
-Threads 남은 항목: 108 (36.00일) / Shorts 남은 항목: 108 (108.00일)
+```
+Threads 남은 항목: N (일수) / Shorts 남은 항목: N (일수)
+```
+
+ep069–ep081이 소비된 시점의 남은 항목은 95개입니다. 그 시점의 `format_inventory` 출력:
+
+```
+Threads 남은 항목: 95 (31.67일) / Shorts 남은 항목: 95 (95.00일)
+```
+
+그 뒤에 스케줄이 더 소비하면 `content_queue/state.json`만 바뀌고 이 예시는 그대로입니다. 현재 값은 `python consume_content_queue.py --report`로 확인합니다.
 
 ep082–ep176 아흔다섯 편은 11월–12월 사연입니다. 김장, 수능, 빼빼로, 블프, 첫눈, 크리스마스, 송년회, 연말정산, 제야처럼 계절이 갈리고, 집과 회사 이야기도 섞여 있습니다.
 
-시트에 같은 제목이 이미 있으면 다음 Actions 실행이 그 항목을 소비로만 표시합니다. 그 뒤의 일수는 `python consume_content_queue.py --report`로 다시 계산합니다.
+시트에 같은 제목이 이미 있으면 다음 Actions 실행이 그 항목을 소비로만 표시합니다.
 
 ## 항목을 더할 때
 
