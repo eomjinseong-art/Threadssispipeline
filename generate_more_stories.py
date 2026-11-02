@@ -1,11 +1,15 @@
 """
-쓰레드 언니들 사연 자동화 - 사연 재고 자동 보충
+쓰레드 언니들 사연 자동화 - 사연 재고 수동 보충
 
-구글 시트에서 Status가 "대기"인 사연이 일정 개수 미만이면
-OpenAI(ChatGPT)로 새 사연을 생성해 시트 끝에 추가한다.
+스케줄 워크플로는 이 스크립트를 실행하지 않는다. 재고는
+``consume_content_queue.py`` 가 커밋된 ``content_queue/queue.json`` 에서 채운다.
 
-필요 환경변수:
-  OPENAI_API_KEY
+사람이 직접 실행할 때만 LLM으로 사연을 만든다.
+GEMINI_API_KEY 가 있으면 Gemini(gemini-2.5-flash, OpenAI 호환 엔드포인트)를 쓰고,
+없을 때만 OPENAI_API_KEY 로 폴백한다.
+
+필요 환경변수 (수동 실행):
+  GEMINI_API_KEY  또는  OPENAI_API_KEY
   GOOGLE_SHEETS_CREDENTIALS
 """
 
@@ -14,8 +18,8 @@ import json
 
 import gspread
 from google.oauth2.service_account import Credentials
-from openai import OpenAI
 
+from manual_llm import SCHEDULED_LLM_LOG, open_manual_client, scheduled_llm_blocked
 from story_format import ensure_curiosity, normalize_title, strip_leading_ep
 
 SHEET_ID = "1AOvI5ExbZ4j_BJHZvZnWnXExCDOebjxgsiRr7SWfuDE"
@@ -24,6 +28,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 BATCH_SIZE = 50
 MIN_PENDING = 10
 PENDING_STATUS = "대기"
+# 수동 OpenAI 폴백 모델. Gemini 키가 있으면 open_manual_client 가 이 값을 쓰지 않는다.
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
 SYSTEM_PROMPT = """당신은 한국어 숏폼·쓰레드용 창작 사연 작가입니다.
@@ -105,7 +110,7 @@ def should_generate(records: list[dict]) -> tuple[bool, list[str], int, int]:
 CHUNK_SIZE = 10
 
 
-def generate_chunk(client: OpenAI, existing_titles: list[str], count: int) -> list[dict]:
+def generate_chunk(client, existing_titles: list[str], count: int, model: str) -> list[dict]:
     used_titles_text = "\n".join(f"- {t}" for t in existing_titles) or "(없음)"
     user_prompt = (
         f"아래는 이미 쓴 제목 목록입니다. 겹치지 않는 완전히 새로운 사연을 "
@@ -116,7 +121,7 @@ def generate_chunk(client: OpenAI, existing_titles: list[str], count: int) -> li
     )
 
     response = client.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=model,
         temperature=0.9,
         response_format={"type": "json_object"},
         messages=[
@@ -143,15 +148,15 @@ def generate_chunk(client: OpenAI, existing_titles: list[str], count: int) -> li
     return data
 
 
-def generate_stories(client: OpenAI, existing_titles: list[str], count: int) -> list[dict]:
+def generate_stories(client, existing_titles: list[str], count: int, model: str) -> list[dict]:
     all_stories: list[dict] = []
     titles_pool = list(existing_titles)
     remaining = count
 
     while remaining > 0:
         chunk_size = min(CHUNK_SIZE, remaining)
-        print(f"  생성 중... ({len(all_stories)}/{count}) model={OPENAI_MODEL}")
-        chunk = generate_chunk(client, titles_pool, chunk_size)
+        print(f"  생성 중... ({len(all_stories)}/{count}) model={model}")
+        chunk = generate_chunk(client, titles_pool, chunk_size, model)
 
         if not chunk:
             print("  [경고] 이번 요청에서 0개 반환, 중단합니다.")
@@ -216,6 +221,9 @@ def stories_to_rows(stories: list[dict], start_ep_num: int) -> list[list[str]]:
 
 
 def main():
+    if scheduled_llm_blocked():
+        print(SCHEDULED_LLM_LOG)
+        return
     gc = load_client()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.sheet1
@@ -233,15 +241,13 @@ def main():
 
     print(
         f"재고 부족(Threads 대기 {pending}개, YouTube 대기 {youtube_pending}개, "
-        f"기준 {MIN_PENDING}). EP.{next_ep_num:03d}부터 {BATCH_SIZE}개 생성 시작... (OpenAI)"
+        f"기준 {MIN_PENDING}). EP.{next_ep_num:03d}부터 {BATCH_SIZE}개 생성 시작... (수동 LLM)"
     )
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("OPENAI_API_KEY 환경변수가 필요합니다.")
-    client = OpenAI(api_key=api_key)
+    client, model = open_manual_client("gpt-4.1-mini", openai_model_env="OPENAI_MODEL")
+    print(f"[llm] 수동 사연 생성 model={model}")
 
-    stories = generate_stories(client, existing_titles, BATCH_SIZE)
+    stories = generate_stories(client, existing_titles, BATCH_SIZE, model)
     before = len(stories)
     stories = drop_duplicate_stories(stories, existing_titles)
     if len(stories) != before:
@@ -269,8 +275,8 @@ def main():
 
 
 def refill_specs() -> None:
-    """같은 단계(OPENAI_API_KEY·시트 자격증명 있음)에서 EP.67 스펙 재고도 보충한다.
-    워크플로 파일을 고치지 않고 refill_queue.py 를 매 실행 돌리기 위한 연결."""
+    """수동 실행에서만 EP.67 스펙 재고도 보충한다.
+    스케줄 워크플로는 이 스크립트를 부르지 않는다."""
     if os.environ.get("REFILL_NESTED"):
         return
     import subprocess, sys
@@ -296,6 +302,9 @@ def refill_specs() -> None:
 
 
 if __name__ == "__main__":
+    if scheduled_llm_blocked():
+        print(SCHEDULED_LLM_LOG)
+        raise SystemExit(0)
     try:
         main()
     finally:
