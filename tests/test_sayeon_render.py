@@ -72,7 +72,10 @@ class SayeonSpecTests(unittest.TestCase):
     def test_pending_specs_estimate_inside_generation_window(self):
         lo, hi = ESTIMATE_RANGE
         pending = [spec for _path, spec in load_specs() if spec["episode"] >= 79]
-        self.assertEqual(sorted(spec["episode"] for spec in pending), [79, 80, 81])
+        episodes = sorted(spec["episode"] for spec in pending)
+        self.assertEqual(episodes[:3], [79, 80, 81])
+        self.assertEqual(episodes[-1], 176)
+        self.assertEqual(len(episodes), 98)
         for spec in pending:
             est = estimate_duration(spec)
             self.assertGreaterEqual(est, lo, spec["episode"])
