@@ -55,10 +55,10 @@ class TtsBackoffTests(unittest.TestCase):
         self.assertEqual(sleeps, [2, 4])
         self.assertFalse(common._edge_rate_limited)
 
-    def test_exhausted_429_falls_back_once_then_skips_edge(self):
+    def test_exhausted_429_uses_gtts_then_skips_edge(self):
         sleeps: list[float] = []
         with tempfile.TemporaryDirectory() as tmp:
-            state = {"edge": 0, "openai": 0}
+            state = {"edge": 0, "gtts": 0, "openai": 0}
 
             def fake_run(cmd):
                 if "--write-media" in cmd:
@@ -71,24 +71,82 @@ class TtsBackoffTests(unittest.TestCase):
                         Path(arg).write_bytes(b"")
                 return ""
 
+            def fake_gtts(text, voice, rate, pitch, mp3):
+                state["gtts"] += 1
+                Path(mp3).write_bytes(b"mp3")
+
             def fake_openai(text, voice, rate, pitch, mp3):
                 state["openai"] += 1
                 Path(mp3).write_bytes(b"mp3")
 
             env = {"OPENAI_API_KEY": "test-key", "OPENAI_API_KEY_FIXED": "", "TTS_BACKEND": "edge"}
             with patch.dict(os.environ, env, clear=False), patch.object(common, "run", side_effect=fake_run), patch.object(
-                common, "openai_tts", side_effect=fake_openai
-            ), patch.object(common.time, "sleep", side_effect=sleeps.append):
+                common, "gtts_tts", side_effect=fake_gtts
+            ), patch.object(common, "openai_tts", side_effect=fake_openai), patch.object(
+                common.time, "sleep", side_effect=sleeps.append
+            ):
                 first = common.tts("한 문장.", "ko-KR-SunHiNeural", os.path.join(tmp, "a.wav"), cache_dir=os.path.join(tmp, "c1"))
                 second = common.tts("다른 문장.", "ko-KR-SunHiNeural", os.path.join(tmp, "b.wav"), cache_dir=os.path.join(tmp, "c2"))
         self.assertEqual(first, 1.25)
         self.assertEqual(second, 1.25)
         self.assertEqual(state["edge"], len(common.TTS_RATE_LIMIT_DELAYS) + 1)
-        self.assertEqual(state["openai"], 2)
+        self.assertEqual(state["gtts"], 2)
+        self.assertEqual(state["openai"], 0)
         self.assertEqual(sleeps, list(common.TTS_RATE_LIMIT_DELAYS))
         self.assertTrue(common._edge_rate_limited)
 
-    def test_exhausted_429_without_openai_key_raises(self):
+    def test_gtts_failure_is_the_only_path_to_openai(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = {"openai": 0}
+
+            def fake_run(cmd):
+                if "--write-media" in cmd:
+                    raise RuntimeError(_RATE)
+                if cmd and cmd[0] == "ffprobe":
+                    return "1.0\n"
+                for arg in cmd:
+                    if isinstance(arg, str) and arg.endswith(".wav"):
+                        Path(arg).write_bytes(b"")
+                return ""
+
+            def fake_openai(text, voice, rate, pitch, mp3):
+                state["openai"] += 1
+                Path(mp3).write_bytes(b"mp3")
+
+            env = {"OPENAI_API_KEY": "test-key", "OPENAI_API_KEY_FIXED": "", "TTS_BACKEND": "edge"}
+            with patch.dict(os.environ, env, clear=False), patch.object(common, "run", side_effect=fake_run), patch.object(
+                common, "gtts_tts", side_effect=RuntimeError("gtts down")
+            ), patch.object(common, "openai_tts", side_effect=fake_openai), patch.object(
+                common.time, "sleep", return_value=None
+            ):
+                dur = common.tts("한 문장.", "ko-KR-SunHiNeural", os.path.join(tmp, "a.wav"), cache_dir=os.path.join(tmp, "c"))
+        self.assertEqual(dur, 1.0)
+        self.assertEqual(state["openai"], 1)
+
+    def test_exhausted_429_without_openai_key_uses_gtts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def fake_run(cmd):
+                if "--write-media" in cmd:
+                    raise RuntimeError(_RATE)
+                if cmd and cmd[0] == "ffprobe":
+                    return "1.1\n"
+                for arg in cmd:
+                    if isinstance(arg, str) and arg.endswith(".wav"):
+                        Path(arg).write_bytes(b"")
+                return ""
+
+            def write_mp3(text, voice, rate, pitch, mp3):
+                Path(mp3).write_bytes(b"mp3")
+
+            env = {"OPENAI_API_KEY": "", "OPENAI_API_KEY_FIXED": "", "TTS_BACKEND": "edge"}
+            with patch.dict(os.environ, env, clear=False), patch.object(common, "run", side_effect=fake_run), patch.object(
+                common, "gtts_tts", side_effect=write_mp3
+            ), patch.object(common, "openai_tts") as openai, patch.object(common.time, "sleep", return_value=None):
+                dur = common.tts("한 문장.", "ko-KR-SunHiNeural", os.path.join(tmp, "a.wav"), cache_dir=os.path.join(tmp, "c"))
+        self.assertEqual(dur, 1.1)
+        openai.assert_not_called()
+
+    def test_exhausted_429_and_gtts_without_openai_key_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
             def fake_run(cmd):
                 if "--write-media" in cmd:
@@ -97,16 +155,17 @@ class TtsBackoffTests(unittest.TestCase):
 
             env = {"OPENAI_API_KEY": "", "OPENAI_API_KEY_FIXED": "", "TTS_BACKEND": "edge"}
             with patch.dict(os.environ, env, clear=False), patch.object(common, "run", side_effect=fake_run), patch.object(
-                common.time, "sleep", return_value=None
-            ):
+                common, "gtts_tts", side_effect=RuntimeError("gtts down")
+            ), patch.object(common, "openai_tts") as openai, patch.object(common.time, "sleep", return_value=None):
                 with self.assertRaises(RuntimeError) as caught:
                     common.tts("한 문장.", "ko-KR-SunHiNeural", os.path.join(tmp, "a.wav"), cache_dir=os.path.join(tmp, "c"))
         self.assertIn("429", str(caught.exception))
+        openai.assert_not_called()
 
-    def test_other_errors_retry_immediately_then_fall_back(self):
+    def test_other_errors_backoff_then_gtts(self):
         sleeps: list[float] = []
         with tempfile.TemporaryDirectory() as tmp:
-            state = {"edge": 0}
+            state = {"edge": 0, "gtts": 0}
 
             def fake_run(cmd):
                 if "--write-media" in cmd:
@@ -119,20 +178,37 @@ class TtsBackoffTests(unittest.TestCase):
                         Path(arg).write_bytes(b"")
                 return ""
 
+            def fake_gtts(text, voice, rate, pitch, mp3):
+                state["gtts"] += 1
+                Path(mp3).write_bytes(b"mp3")
+
             env = {"OPENAI_API_KEY": "test-key", "OPENAI_API_KEY_FIXED": "", "TTS_BACKEND": "edge"}
             with patch.dict(os.environ, env, clear=False), patch.object(common, "run", side_effect=fake_run), patch.object(
-                common, "openai_tts", return_value=None
-            ), patch.object(common.time, "sleep", side_effect=sleeps.append):
+                common, "gtts_tts", side_effect=fake_gtts
+            ), patch.object(common, "openai_tts") as openai, patch.object(
+                common.time, "sleep", side_effect=sleeps.append
+            ):
                 common.tts("한 문장.", "ko-KR-SunHiNeural", os.path.join(tmp, "a.wav"), cache_dir=os.path.join(tmp, "c"))
-        self.assertEqual(state["edge"], 3)
-        self.assertEqual(sleeps, [])
+        self.assertEqual(state["edge"], len(common.TTS_OTHER_ERROR_DELAYS) + 1)
+        self.assertEqual(state["gtts"], 1)
+        self.assertEqual(sleeps, list(common.TTS_OTHER_ERROR_DELAYS))
+        openai.assert_not_called()
         self.assertFalse(common._edge_rate_limited)
 
-    def test_render_step_passes_openai_key_and_buffers_unit_test_logs(self):
+    def test_render_step_does_not_pass_openai_key(self):
         text = Path(__file__).resolve().parents[1].joinpath(".github/workflows/daily_shorts.yml").read_text(encoding="utf-8")
+        threads = Path(__file__).resolve().parents[1].joinpath(".github/workflows/daily_threads.yml").read_text(encoding="utf-8")
         self.assertIn("unittest discover -s tests -b", text)
         render = text.split("대기 사연", 1)[1].split("렌더된 mp4", 1)[0]
-        self.assertIn("OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}", render)
+        self.assertNotIn("OPENAI_API_KEY", render)
+        self.assertNotIn("secrets.OPENAI_API_KEY", text)
+        self.assertNotIn("secrets.OPENAI_API_KEY", threads)
+        self.assertNotIn("generate_more_stories.py", text)
+        self.assertNotIn("generate_more_stories.py", threads)
+        self.assertNotIn("refill_queue.py", text)
+        self.assertNotIn("refill_queue.py", threads)
+        self.assertIn("consume_content_queue.py --channel shorts", text)
+        self.assertIn("consume_content_queue.py --channel threads", threads)
 
 
 if __name__ == "__main__":

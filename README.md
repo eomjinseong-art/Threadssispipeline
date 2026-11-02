@@ -12,7 +12,7 @@ waitmybabe Shorts는 **EP.67 '내가 차린 제사상, 시어머니 공으로?'(
 - 렌더러: `sayeon_engine/` (`sayeon_render.py`가 호출). 폰트: Noto CJK·Noto Color Emoji(apt), Gowun Batang(`assets/fonts/`).
 - 대기 행마다 **손으로 쓴 스펙** `sayeon_specs/sayeon_epNNN.json`이 필요합니다. `topic`에 시트 `제목`을 그대로 적습니다(", 결말은?" 유무는 무시하고 매칭).
 - 스펙이 없으면 **렌더·업로드하지 않고** 행을 `대기`로 남기며 Slack으로 알립니다. 예전(타이핑 자막/흰 배경) 디자인으로 대신 올리는 경로는 없습니다.
-- `refill_queue.py` 가 새 스펙을 쓸 때 낭독 길이를 49~53초로 추정해 거르고, 짧은 마디를 다시 쓰게 합니다. 렌더가 45~58초 밖이면 그 행만 `보류`입니다.
+- 스케줄은 커밋된 `content_queue/queue.json` 만 소비합니다. LLM으로 스펙을 쓰는 `refill_queue.py` 는 수동 스크립트이며, 저장 전에 낭독 길이를 49~53초로 추정해 거릅니다. 렌더가 45~58초 밖이면 그 행만 `보류`입니다. 큐 형식은 `docs/CONTENT_QUEUE.md`.
 - 기준 스펙: `sayeon_specs/reference/sayeon_ep067.json`, `sayeon_ep068.json`.
 - 로컬 확인: `python sayeon_render.py sayeon_specs/sayeon_ep073.json` 또는 `python make_shorts.py --dry-run --script <spec>`.
 
@@ -46,9 +46,9 @@ GitHub Actions `daily-shorts-pipeline` (`.github/workflows/daily_shorts.yml`):
 
 각 실행:
 
-1. (조건부) 사연 재고 보충 (`generate_more_stories.py`, `OPENAI_API_KEY`) — 새 행의 `Status`는 대기. YouTube 칸은 다음 Shorts 실행이 시드
+1. 커밋된 큐 보충 (`consume_content_queue.py`, LLM 없음). 큐가 비어 있으면 로그만 남기고 건너뜁니다. 새 행의 `Status`는 대기. YouTube 칸은 다음 Shorts 실행이 시드
 2. `YouTube=대기` 중 가장 작은 EP 1개
-3. edge-tts + 2~3줄 타이핑 자막 (문장/화자 바뀌면 창을 비움)
+3. EP.67 디자인 렌더. 음성은 edge-tts(실패하면 백오프 후 재시도, 그다음 gTTS, OpenAI TTS는 키가 있을 때만 마지막)
 4. 1080×1920 / 25fps 조립 (인트로 + 들릴 정도의 BGM)
 5. YouTube Shorts 업로드
 6. 성공 시에만 `YouTube=완료`
@@ -83,7 +83,7 @@ GET https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token&a
 | `YOUTUBE_CLIENT_SECRET_JSON` | 권장 | OAuth 클라이언트 JSON (trailing 텍스트 있어도 첫 객체만 사용) |
 | `YOUTUBE_REFRESH_TOKEN` | 권장 | refresh token 백업 |
 | `EXPECTED_YOUTUBE_CHANNEL_ID` | 권장 | `UCbMITZoZxPQrmKsZdbwUB7g` (waitmybabe). 다르면 업로드 중단 |
-| `OPENAI_API_KEY` | 선택 | 사연 재고 보충 |
+| `OPENAI_API_KEY` | 스케줄에서 사용하지 않음 | 수동 생성 폴백, 그리고 edge-tts·gTTS가 모두 실패할 때만 TTS |
 | `SLACK_WEBHOOK_URL` | 선택 | 실패 알림 |
 | `THREADS_ACCESS_TOKEN` | Threads 필수 | long-lived 토큰. 주간 갱신 워크플로가 교체 |
 | `THREADS_USER_ID` | Threads 필수 | Threads 사용자 ID |
@@ -136,7 +136,7 @@ python upload_video.py --video output/final_row43.mp4 --script output/script_row
 
 `python append_sheet_topics.py` 가 `topics/w01_w21.csv`를 시트 **끝**에 추가합니다. 기존 행은 지우거나 덮어쓰지 않고, 같은 제목은 건너뜁니다. `adapted_10.csv`의 원본 EP가 이미 있으면 행을 더 넣지 않고 Shorts를 만들 때 각색합니다. 자격 증명 없이 목록만 보려면 `python append_sheet_topics.py --dry-run`.
 
-YouTube 대기 또는 Threads 대기가 10개 미만이면 `generate_more_stories.py`가 같은 반전 형식으로 50개를 보충합니다. Threads용 3언니 줄도 같이 채웁니다. 고를 때는 새 원작 제목을 먼저, 그다음 각색 대상 EP, 그다음 가장 작은 EP를 쓰고 중복 제목은 건너뜁니다.
+YouTube 대기 또는 Threads 대기가 10개 미만이면 `consume_content_queue.py`가 `content_queue/queue.json`에서 스펙이 있는 항목을 시트에 옮깁니다. 큐가 비어 있으면 실패하지 않고 건너뜁니다. 사람이 직접 `generate_more_stories.py` / `refill_queue.py`를 돌릴 때만 LLM을 쓰며, `GEMINI_API_KEY`가 있으면 Gemini `gemini-2.5-flash`를 우선합니다. 스케줄 워크플로는 그 스크립트를 호출하지 않습니다.
 
 ## 시트 컬럼
 

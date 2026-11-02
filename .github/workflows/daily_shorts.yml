@@ -12,6 +12,10 @@ concurrency:
   group: shorts-publish
   cancel-in-progress: false
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   shorts:
     runs-on: ubuntu-latest
@@ -45,12 +49,11 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: python append_sheet_topics.py
 
-      - name: "0단계: 사연 재고 자동 보충 (조건부)"
+      - name: "0단계: 커밋된 큐에서 사연·스펙 보충 (LLM 없음)"
         continue-on-error: true
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-        run: python generate_more_stories.py
+        run: python consume_content_queue.py --channel shorts
 
       - name: "대기 사연 → Shorts 렌더 → YouTube 업로드"
         env:
@@ -62,8 +65,7 @@ jobs:
           YOUTUBE_CLIENT_SECRET_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRET_JSON }}
           EXPECTED_YOUTUBE_CHANNEL_ID: ${{ secrets.EXPECTED_YOUTUBE_CHANNEL_ID }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          # 429 백오프를 다 써도 이 키로 OpenAI TTS 에 넘긴다. 키 값은 바꾸지 않는다.
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # TTS 는 edge-tts 재시도 후 gTTS. 이 잡에는 OpenAI 키를 넣지 않는다.
         run: python make_shorts.py
 
       - name: 렌더된 mp4 아티팩트 업로드

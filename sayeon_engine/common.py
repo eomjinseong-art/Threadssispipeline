@@ -1,4 +1,4 @@
-"""Shared helpers: TTS (edge-tts), text rendering w/ emoji, timeline -> mp4, original BGM synth."""
+"""Shared helpers: TTS (edge-tts, then gTTS, then OpenAI), text rendering w/ emoji, timeline -> mp4, original BGM synth."""
 import asyncio, json, os, re, subprocess, math, wave, hashlib, shutil, time
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -147,6 +147,8 @@ def openai_tts(text, voice, rate, pitch, mp3):
 # Immediate retries hit the same limit. Sleep between attempts, then stop
 # calling edge-tts for the rest of this process.
 TTS_RATE_LIMIT_DELAYS = (2, 4, 8, 16, 32)
+# Non-429 failures also back off before the next edge-tts try (3 tries total).
+TTS_OTHER_ERROR_DELAYS = (1, 2)
 _edge_rate_limited = False
 
 
@@ -164,11 +166,28 @@ def _openai_tts_key() -> str:
     return os.environ.get("OPENAI_API_KEY_FIXED") or os.environ.get("OPENAI_API_KEY") or ""
 
 
-def run_tts_command(cmd, *, sleep=None, rate_delays=TTS_RATE_LIMIT_DELAYS):
+def _gtts_slow(rate: str) -> bool:
+    """gTTS has no pitch/rate; only a very slow requested rate uses slow=True."""
+    try:
+        return int(str(rate).strip().replace("%", "").replace("+", "") or "0") <= -10
+    except ValueError:
+        return False
+
+
+def gtts_tts(text, voice, rate, pitch, mp3):
+    """Free Korean fallback. One voice; edge-tts rate/pitch are not reproduced."""
+    try:
+        from gtts import gTTS
+    except ImportError as exc:
+        raise RuntimeError("gTTS is not installed") from exc
+    gTTS(text=text, lang="ko", slow=_gtts_slow(rate)).save(mp3)
+
+
+def run_tts_command(cmd, *, sleep=None, rate_delays=TTS_RATE_LIMIT_DELAYS, other_delays=TTS_OTHER_ERROR_DELAYS):
     """Run one edge-tts CLI call.
 
-    Other errors are retried twice immediately (three tries total).
-    429/503 sleeps through `rate_delays` (seconds) before the last failure is raised.
+    429/503 sleeps through `rate_delays` before the last failure is raised.
+    Other errors sleep through `other_delays` (three tries total).
     """
     if sleep is None:
         sleep = time.sleep
@@ -190,40 +209,67 @@ def run_tts_command(cmd, *, sleep=None, rate_delays=TTS_RATE_LIMIT_DELAYS):
                 sleep(delay)
                 continue
             other_failures += 1
-            if other_failures >= 3:
+            if other_failures > len(other_delays):
                 raise
-            print("[tts] edge-tts failed, retrying")
+            delay = other_delays[other_failures - 1]
+            print(
+                f"[tts] edge-tts failed, retry in {delay:.0f}s "
+                f"({other_failures}/{len(other_delays) + 1})"
+            )
+            sleep(delay)
+
+
+def _write_speech_mp3(text, voice, rate, pitch, mp3):
+    """edge-tts with backoff, then gTTS, then OpenAI only if a key is set."""
+    global _edge_rate_limited
+    backend = os.environ.get("TTS_BACKEND", "edge")
+    if backend == "openai":
+        openai_tts(text, voice, rate, pitch, mp3)
+        return
+    if backend == "gtts":
+        gtts_tts(text, voice, rate, pitch, mp3)
+        return
+
+    edge_error = None
+    if _edge_rate_limited:
+        print("[tts] edge-tts skipped after rate limit, trying gTTS")
+    else:
+        try:
+            run_tts_command(
+                [EDGE_TTS, "--voice", voice, f"--rate={rate}", f"--pitch={pitch}", "--text", text, "--write-media", mp3]
+            )
+            return
+        except RuntimeError as exc:
+            edge_error = exc
+            if tts_error_is_rate_limit(exc):
+                _edge_rate_limited = True
+            print("[tts] edge-tts failed, falling back to gTTS")
+    try:
+        gtts_tts(text, voice, rate, pitch, mp3)
+    except Exception as exc:
+        print(f"[tts] gTTS failed ({exc})")
+        if not _openai_tts_key():
+            if edge_error is not None:
+                raise RuntimeError(f"edge-tts and gTTS failed: {edge_error}") from exc
+            raise
+        print("[tts] falling back to OpenAI gpt-4o-mini-tts")
+        openai_tts(text, voice, rate, pitch, mp3)
 
 
 def tts(text, voice, out_wav, rate='+0%', pitch='+0Hz', cache_dir=None):
     """edge-tts -> 48k mono wav, leading/trailing silence trimmed.
 
-    A 429/503 backs off inside run_tts_command. If the budget is used up and an
-    OpenAI key is set, this segment and later ones in the same process use
-    gpt-4o-mini-tts instead of hammering the websocket again.
+    A failure retries edge-tts with backoff. The next free voice is gTTS.
+    OpenAI gpt-4o-mini-tts runs only when both of those fail and an API key is set.
+    After a 429/503 budget is spent, later segments in this process skip edge-tts.
     """
-    global _edge_rate_limited
     key = hashlib.md5(f'{text}|{voice}|{rate}|{pitch}'.encode()).hexdigest()[:12]
     cache_dir = cache_dir or os.path.join(os.path.dirname(out_wav), '_ttscache')
     os.makedirs(cache_dir, exist_ok=True)
     cached = os.path.join(cache_dir, key + '.wav')
     if not os.path.exists(cached):
         mp3 = cached[:-4] + '.mp3'
-        backend = os.environ.get('TTS_BACKEND', 'edge')
-        if backend != 'openai' and _edge_rate_limited:
-            backend = 'openai'
-        if backend != 'openai':
-            try:
-                run_tts_command([EDGE_TTS, '--voice', voice, f'--rate={rate}', f'--pitch={pitch}', '--text', text, '--write-media', mp3])
-            except RuntimeError as exc:
-                if tts_error_is_rate_limit(exc):
-                    _edge_rate_limited = True
-                if not _openai_tts_key():
-                    raise
-                print('[tts] edge-tts failed, falling back to OpenAI gpt-4o-mini-tts')
-                backend = 'openai'
-        if backend == 'openai':
-            openai_tts(text, voice, rate, pitch, mp3)
+        _write_speech_mp3(text, voice, rate, pitch, mp3)
         run(['ffmpeg', '-v', 'error', '-y', '-i', mp3, '-af',
              'silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse',
              '-ar', '48000', '-ac', '1', cached])

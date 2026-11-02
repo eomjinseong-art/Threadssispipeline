@@ -11,6 +11,10 @@ concurrency:
   group: threads-publish
   cancel-in-progress: false
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -30,12 +34,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 사연 재고 자동 보충 (조건부)
+      - name: 커밋된 큐에서 사연 보충 (LLM 없음)
         continue-on-error: true
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-        run: python generate_more_stories.py
+        run: python consume_content_queue.py --channel threads
 
       - name: 스레드 글 게시
         env:

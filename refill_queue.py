@@ -1,25 +1,23 @@
-"""waitmybabe Shorts 스펙 재고 자동 보충 (EP.67 디자인).
+"""waitmybabe Shorts 스펙 재고 수동 보충 (EP.67 디자인).
 
-멈춘 원인: generate_more_stories.py 는 시트 '행'만 보충하는데, make_shorts.py 는 행마다
-손으로 쓴 sayeon_specs/*.json 이 있어야 렌더한다. 스펙을 만드는 단계가 없어서
-EP.74(10/5) 이후 '스펙 없음'으로 매일 건너뜀.
+스케줄 워크플로는 이 스크립트를 실행하지 않는다. 매일 올라갈 스펙은
+``content_queue/queue.json`` 과 ``sayeon_specs/`` 에 미리 커밋해 두고
+``consume_content_queue.py`` 가 시트만 채운다.
 
-이 스크립트는 매 실행마다 make_shorts.py 와 같은 순서(pick_youtube_pending_row)로
-YouTube=대기 행을 줄 세우고, 앞쪽 MIN_READY(기본 7)편 중 스펙이 없는 행에 대해
-같은 출처(topics/w01_w21.csv 카탈로그 원작 → 없으면 시트 '사연' 열)로 EP.67 스펙을
-OpenAI로 써서 sayeon_specs/ 에 저장한다. 대기 행 자체가 MIN_READY 미만이면
-generate_more_stories.py 로 시트 행을 먼저 보충한다(시트 자격증명이 있을 때만).
+사람이 직접 실행할 때만, 대기 행 중 스펙이 없는 편을 LLM으로 쓴다.
+GEMINI_API_KEY 가 있으면 Gemini(gemini-2.5-flash)를 쓰고, 없을 때만 OpenAI로 폴백한다.
 
 사용:
   python refill_queue.py                 # 시트(GOOGLE_SHEETS_CREDENTIALS)
   python refill_queue.py --xlsx sheet.xlsx --dry-run   # 로컬 시트 사본, 저장 안 함
-환경변수: OPENAI_API_KEY (없으면 OPENAI_API_KEY_FIXED), OPENAI_MODEL(기본 gpt-4.1)
+환경변수: GEMINI_API_KEY (우선) 또는 OPENAI_API_KEY / OPENAI_API_KEY_FIXED
 """
 from __future__ import annotations
 
 import argparse, copy, csv, glob, json, os, re, sys
 
 from fetch_script import PENDING_STATUS, effective_youtube_status, ep_to_int, pick_youtube_pending_row
+from manual_llm import SCHEDULED_LLM_LOG, open_manual_client, scheduled_llm_blocked
 from sayeon_render import (
     ESTIMATE_RANGE,
     SPECS_DIR,
@@ -37,6 +35,7 @@ MIN_READY = int(os.environ.get("REFILL_MIN_READY", "7"))
 # EP.79(244자, 42.9초)처럼 짧은 마디가 통과하지 않게 한다.
 CHARS = (265, 330)
 BANNED = ("진성", "로빈", "대전")
+# 수동 OpenAI 폴백. Gemini 키가 있으면 main() 이 이 값을 gemini-2.5-flash 로 바꾼다.
 MODEL = os.environ.get("OPENAI_SPEC_MODEL", "gpt-4.1")
 
 
@@ -358,6 +357,10 @@ def write_spec(client, row: dict, cat: dict | None, ep: int, refs: list[dict]) -
 
 
 def main() -> int:
+    global MODEL
+    if scheduled_llm_blocked():
+        print(SCHEDULED_LLM_LOG)
+        return 0
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", help="시트 xlsx 사본(로컬 테스트)")
     ap.add_argument("--min", type=int, default=MIN_READY)
@@ -382,11 +385,12 @@ def main() -> int:
     if not missing or a.dry_run:
         return 0
 
-    from openai import OpenAI
-    key = os.environ.get("OPENAI_API_KEY_FIXED") or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        print("OPENAI_API_KEY 가 없어 보충하지 못했습니다."); return 1
-    client = OpenAI(api_key=key)
+    try:
+        client, MODEL = open_manual_client("gpt-4.1", openai_model_env="OPENAI_SPEC_MODEL")
+    except SystemExit:
+        print("GEMINI_API_KEY 또는 OPENAI_API_KEY 가 없어 보충하지 못했습니다.")
+        return 1
+    print(f"[llm] 수동 스펙 생성 model={MODEL}")
     refs = [json.load(open(os.path.join(SPECS_DIR, "reference", f), encoding="utf-8")) for f in ("sayeon_ep067.json", "sayeon_ep068.json")]
     cats = catalog()
     # 방송 회차 = 68 + (분홍판으로 올라간 행 수) + 큐 위치. CI에서 스펙 푸시가 안 돼도 번호가 겹치지 않게.
