@@ -56,6 +56,15 @@ class YouTubeQueueTests(unittest.TestCase):
         self.assertEqual(row["제목"], "내 결혼을 반대하는 절친")
         self.assertEqual(row["Status"], "완료")
 
+    def test_accept_skips_rows_without_spec(self):
+        records = [
+            _row("101", status="완료", youtube="대기", title="스펙 없는 사연"),
+            _row("102", status="대기", youtube="대기", title="스펙 있는 사연"),
+        ]
+        idx, row = pick_youtube_pending_row(records, lambda t: t == "스펙 있는 사연")
+        self.assertEqual(idx, 3)
+        self.assertEqual(row["제목"], "스펙 있는 사연")
+
     def test_skips_threads_pending_if_youtube_already_done(self):
         records = [
             _row("102", status="대기", youtube="완료"),

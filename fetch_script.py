@@ -116,7 +116,7 @@ def queue_priority(row: dict) -> int:
     return 2
 
 
-def pick_youtube_pending_row(records: list[dict]) -> tuple[int | None, dict | None]:
+def pick_youtube_pending_row(records: list[dict], accept=None) -> tuple[int | None, dict | None]:
     """YouTube=대기 1건.
 
     같은 제목은 EP가 빠른 행만 남긴다(시트의 중복 제목은 건너뜀).
@@ -140,6 +140,8 @@ def pick_youtube_pending_row(records: list[dict]) -> tuple[int | None, dict | No
         if key:
             seen_titles.add(key)
         if effective_youtube_status(row) != PENDING_STATUS:
+            continue
+        if accept is not None and not accept(str(row.get("제목", ""))):
             continue
         candidates.append((queue_priority(row), ep, i, row))
     if not candidates:
@@ -180,10 +182,19 @@ def ensure_youtube_column(ws: gspread.Worksheet) -> int:
     return col
 
 
-def find_pending_row(ws: gspread.Worksheet):
-    """YouTube 대기 1건. 새 원작·각색 대상을 일반 백로그보다 먼저 고른다."""
+def find_pending_row(ws: gspread.Worksheet, accept=None):
+    """YouTube 대기 1건. 새 원작·각색 대상을 일반 백로그보다 먼저 고른다.
+
+    accept(제목) 가 주어지면 그 조건(예: EP.67 스펙 있음)을 만족하는 대기 행을 먼저 고른다.
+    만족하는 행이 하나도 없을 때만 조건 없이 고른다(호출부가 spec_missing 으로 알린다).
+    """
     ensure_youtube_column(ws)
-    return pick_youtube_pending_row(ws.get_all_records())
+    records = ws.get_all_records()
+    if accept is not None:
+        idx, row = pick_youtube_pending_row(records, accept)
+        if idx is not None:
+            return idx, row
+    return pick_youtube_pending_row(records)
 
 
 def validate_row(row: dict, ep_label: str) -> None:

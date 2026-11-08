@@ -21,9 +21,15 @@ from upload_video import already_posted_short_today, notify_failure, upload_spec
 MAX_LENGTH_HOLDS = 5
 
 
+def _has_spec(title: str) -> bool:
+    return find_spec_for_title(title)[0] is not None
+
+
 def _take_pending_spec(ws):
     """대기 1건과 그 스펙. 스펙이 없으면 (row_index, None, None, None). 대기가 없으면 (None, None, None, None)."""
-    row_index, row = find_pending_row(ws)
+    # 스펙 없는 대기 행(예: 예전 OpenAI 리필이 시트에만 넣은 행)이 맨 앞에 있어도
+    # 멈추지 않고, 스펙이 있는 다음 대기 행을 고른다.
+    row_index, row = find_pending_row(ws, accept=_has_spec)
     if row_index is None:
         return None, None, None, None
     title = str(row.get("제목", ""))
