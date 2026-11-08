@@ -198,8 +198,26 @@ def count_threads_pending(records: list[dict]) -> int:
     return sum(1 for row in records if str(row.get("Status", "")).strip() == PENDING_STATUS)
 
 
-def count_shorts_pending(records: list[dict]) -> int:
-    return sum(1 for row in records if effective_youtube_status(row) == PENDING_STATUS)
+def count_shorts_pending(records: list[dict], specs_dir: Path | None = None) -> int:
+    """YouTube=대기 이면서 EP.67 스펙이 있는 행 수.
+
+    스펙 없는 대기 행은 make_shorts.py 가 올릴 수 없으므로 재고로 세지 않는다.
+    (10/29~11/7: 스펙 없는 대기 130행 때문에 큐 보충이 '재고 충분'으로 건너뛰었다.)
+    """
+    from sayeon_render import load_specs, topic_key
+
+    specs = load_specs(str(specs_dir or SPECS_DIR))
+    keys = set()
+    for _path, spec in specs:
+        for candidate in (spec.get("topic"), spec.get("title")):
+            if candidate:
+                keys.add(topic_key(candidate))
+    return sum(
+        1
+        for row in records
+        if effective_youtube_status(row) == PENDING_STATUS
+        and topic_key(str(row.get("제목", ""))) in keys
+    )
 
 
 def next_episode(records: list[dict]) -> int:
