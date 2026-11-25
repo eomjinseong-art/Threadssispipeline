@@ -31,7 +31,7 @@ class MonetizationTest(unittest.TestCase):
         self.assertEqual(with_disclosure(once), once)
         self.assertTrue(comment_text("질문").startswith(COUPANG_NOTICE))
         self.assertEqual(comment_text(comment_text("질문")), comment_text("질문"))
-        self.assertTrue(PARTNER_LINK.startswith("https://tinalinkeom.vercel.app/?utm_source=youtube&utm_medium=shorts&utm_campaign=waitmybabe"))
+        self.assertEqual(PARTNER_LINK, "https://link.coupang.com/a/hsdzLh1vB6")
 
     def test_upload_sets_paid_flag_and_falls_back(self):
         from googleapiclient.errors import HttpError
