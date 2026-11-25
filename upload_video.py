@@ -37,10 +37,12 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 from PIL import Image, ImageDraw
 
 from shorts_style import INTRO_BG, INTRO_FG, get_font, thumbnail_path_for_row, wrap_korean
+from monetization import comment_text, with_disclosure
 from story_format import DEFAULT_QUESTION, ensure_curiosity, strip_leading_ep, youtube_title
 
 SCOPES = [
@@ -324,7 +326,7 @@ def post_pinned_style_comment(creds: Credentials, video_id: str, text: str) -> N
             body={
                 "snippet": {
                     "videoId": video_id,
-                    "topLevelComment": {"snippet": {"textOriginal": text}},
+                    "topLevelComment": {"snippet": {"textOriginal": comment_text(text)}},
                 }
             },
         ).execute()
@@ -336,12 +338,23 @@ def post_pinned_style_comment(creds: Credentials, video_id: str, text: str) -> N
         print(f"  [경고] 댓글 게시 실패 (force-ssl 스코프로 재인증이 필요할 수 있습니다): {e}")
 
 
+def _insert(youtube, video_path: str, body: dict, part: str) -> str:
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/mp4")
+    request = youtube.videos().insert(part=part, body=body, media_body=media)
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"  업로드 진행률: {int(status.progress() * 100)}%")
+    return response["id"]
+
+
 def upload_video(creds: Credentials, video_path: str, metadata: dict) -> str:
     youtube = build("youtube", "v3", credentials=creds)
     body = {
         "snippet": {
             "title": metadata["title"],
-            "description": metadata["description"],
+            "description": with_disclosure(metadata["description"]),
             "tags": metadata["tags"],
             "categoryId": "24",
         },
@@ -349,16 +362,18 @@ def upload_video(creds: Credentials, video_path: str, metadata: dict) -> str:
             "privacyStatus": "public",
             "selfDeclaredMadeForKids": False,
         },
+        # '유료 광고 포함' 표시 (쿠팡 파트너스 링크)
+        "paidProductPlacementDetails": {"hasPaidProductPlacement": True},
     }
-    media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/mp4")
-    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
-
-    response = None
-    while response is None:
-        status, response = request.next_chunk()
-        if status:
-            print(f"  업로드 진행률: {int(status.progress() * 100)}%")
-    return response["id"]
+    try:
+        return _insert(youtube, video_path, body, "snippet,status,paidProductPlacementDetails")
+    except HttpError as e:
+        if getattr(getattr(e, "resp", None), "status", None) != 400:
+            raise
+        # 유료 광고 표시를 API가 거부해도 업로드 자체는 막지 않는다.
+        print(f"  [경고] 유료 광고 표시 없이 다시 업로드합니다: {e}")
+        body.pop("paidProductPlacementDetails", None)
+        return _insert(youtube, video_path, body, "snippet,status")
 
 
 def pinned_comment_for(script: dict) -> str:
